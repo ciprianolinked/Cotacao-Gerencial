@@ -3,7 +3,8 @@ import { extractQuotation, validateUploads, type ExtractionHints, type UploadInp
 import { ACCEPTED_UPLOAD_TYPES, MAX_FILES, MAX_FILE_BYTES } from "@/lib/constants";
 
 export const runtime = "nodejs";
-export const maxDuration = 120;
+// Três ou mais PDFs podem levar alguns minutos no Gemini. 300 s é o máximo do plano Hobby da Vercel.
+export const maxDuration = 300;
 
 export async function POST(request: Request) {
   try {

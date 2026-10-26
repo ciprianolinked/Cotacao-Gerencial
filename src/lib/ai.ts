@@ -252,6 +252,8 @@ async function callGemini(
     apiKey,
     input,
     responseSchema: RAW_SCHEMA,
+    // Fica abaixo do limite de 300 s da função, para devolver uma mensagem clara.
+    timeoutMs: 270_000,
   });
   return parseJsonLoose(outputText, "Gemini");
 }

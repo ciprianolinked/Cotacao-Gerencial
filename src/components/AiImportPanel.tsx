@@ -27,6 +27,32 @@ type AiImportPanelProps = {
   ctaLabel?: string;
 };
 
+/** Lê a resposta mesmo quando o servidor devolve uma página de erro em texto, e não JSON. */
+function parseServerResponse(status: number, body: string): AiExtractionResult {
+  let data: (AiExtractionResult & { error?: string }) | null = null;
+  try {
+    data = JSON.parse(body) as AiExtractionResult & { error?: string };
+  } catch {
+    data = null;
+  }
+  if (status >= 200 && status < 300 && data && !data.error) return data;
+  if (data?.error) throw new Error(data.error);
+  if (status === 413 || /PAYLOAD_TOO_LARGE|too large/i.test(body)) {
+    throw new Error(
+      "Os arquivos ultrapassaram o limite de envio do servidor (cerca de 4 MB no total na Vercel). Comprima os PDFs ou envie menos arquivos por vez.",
+    );
+  }
+  if (status === 504 || /TIMEOUT/i.test(body)) {
+    throw new Error(
+      "A IA demorou mais que o tempo permitido pelo servidor. Tente enviar menos PDFs por vez (por exemplo, 1 ou 2) ou arquivos menores.",
+    );
+  }
+  if (status === 0) throw new Error("Não houve resposta do servidor. Verifique a conexão e tente novamente.");
+  throw new Error(
+    `O servidor retornou um erro inesperado (código ${status}). Tente novamente com menos arquivos; se persistir, consulte os registros (Logs) da Vercel.`,
+  );
+}
+
 const STAGES = [
   "Lendo os documentos enviados…",
   "Identificando fornecedores e propostas…",
@@ -52,6 +78,9 @@ export function AiImportPanel({
   const [result, setResult] = useState<AiExtractionResult | null>(null);
   const [applied, setApplied] = useState(false);
   const [status, setStatus] = useState<AiStatus | null>(null);
+  const [progress, setProgress] = useState(0);
+  const [estimate, setEstimate] = useState(0);
+  const [elapsed, setElapsed] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -111,22 +140,55 @@ export function AiImportPanel({
     setError(null);
     setResult(null);
     setStage(0);
+    setProgress(0);
+
+    // Estimativa do tempo de processamento da IA (segundos), baseada no volume enviado.
+    const totalMb = files.reduce((sum, file) => sum + file.size, 0) / (1024 * 1024);
+    const estimatedSeconds = Math.round(15 + files.length * 8 + totalMb * 10 + text.length / 4000);
+    setEstimate(estimatedSeconds);
+    const startedAt = Date.now();
+    let processingStart = 0;
+    let ticker: ReturnType<typeof setInterval> | null = null;
+
     try {
       const form = new FormData();
       files.forEach((file) => form.append("files", file));
       form.append("text", text);
       form.append("hints", JSON.stringify(hints));
-      const response = await fetch("/api/ai/extract", { method: "POST", body: form });
-      if (response.status === 413) {
-        throw new Error("O envio ultrapassou o limite do servidor. Na Vercel, reduza o total dos arquivos para menos de 4 MB e tente novamente.");
-      }
-      const data = (await response.json()) as AiExtractionResult & { error?: string };
-      if (!response.ok || data.error) throw new Error(data.error || "Não foi possível analisar os documentos.");
+
+      const { status, body } = await new Promise<{ status: number; body: string }>((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open("POST", "/api/ai/extract");
+        xhr.timeout = 320_000;
+        // Envio dos arquivos: 0% a 20%.
+        xhr.upload.onprogress = (event) => {
+          if (event.lengthComputable) setProgress(Math.min(20, Math.round((event.loaded / event.total) * 20)));
+        };
+        xhr.upload.onload = () => {
+          processingStart = Date.now();
+          setProgress(20);
+          // Processamento da IA: 20% a 97%, seguindo a estimativa e desacelerando no fim.
+          ticker = setInterval(() => {
+            const elapsed = (Date.now() - processingStart) / 1000;
+            const ratio = 1 - Math.exp(-elapsed / (estimatedSeconds * 0.6));
+            setProgress(Math.min(97, Math.round(20 + ratio * 77)));
+            setElapsed(Math.round((Date.now() - startedAt) / 1000));
+          }, 500);
+        };
+        xhr.onload = () => resolve({ status: xhr.status, body: xhr.responseText });
+        xhr.onerror = () => reject(new Error("Falha de conexão durante o envio. Verifique a internet e tente novamente."));
+        xhr.ontimeout = () => reject(new Error("A análise demorou demais. Envie menos arquivos por vez ou PDFs menores."));
+        xhr.send(form);
+      });
+
+      const data = parseServerResponse(status, body);
+      setProgress(100);
       setResult(data);
       setApplied(false);
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Erro inesperado na análise.");
     } finally {
+      if (ticker) clearInterval(ticker);
       setLoading(false);
     }
   }
@@ -304,12 +366,29 @@ export function AiImportPanel({
         </div>
 
         {loading && (
-          <div className="mt-3 overflow-hidden rounded-lg border border-brand/30 bg-brand-soft/70 px-3 py-2">
-            <div className="h-1 w-full overflow-hidden rounded-full bg-white">
-              <div className="h-full w-1/2 animate-pulse rounded-full bg-brand" />
+          <div className="mt-3 overflow-hidden rounded-lg border border-brand/30 bg-brand-soft/70 px-3 py-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-[11.5px] font-bold text-ink">
+                {progress < 20 ? "Enviando arquivos…" : STAGES[stage]}
+              </p>
+              <span className="font-display text-[18px] leading-none text-ink tabular-nums">{progress}%</span>
             </div>
-            <p className="mt-1.5 text-[11px] font-semibold text-brand-dark">
-              Analisando as propostas — isso pode levar alguns segundos.
+            <div
+              className="mt-2 h-2 w-full overflow-hidden rounded-full bg-white"
+              role="progressbar"
+              aria-label="Progresso da análise da IA"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={progress}
+            >
+              <div className="h-full rounded-full bg-brand transition-all duration-500" style={{ width: `${progress}%` }} />
+            </div>
+            <p className="mt-1.5 text-[10.5px] font-semibold text-brand-dark">
+              {progress < 20
+                ? "Enviando os documentos para análise."
+                : elapsed < estimate
+                  ? `Tempo estimado restante: cerca de ${Math.max(1, estimate - elapsed)} s (decorrido ${elapsed} s).`
+                  : `Finalizando a leitura — documentos maiores podem levar mais tempo (decorrido ${elapsed} s).`}
             </p>
           </div>
         )}
