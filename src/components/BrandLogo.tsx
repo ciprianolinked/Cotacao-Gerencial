@@ -13,8 +13,10 @@ type BrandLogoProps = {
   className?: string;
 };
 
-const LOGO_URL = "/brand/gerencial-logo.png";
-const MARK_URL = "/brand/gerencial-simbolo.png";
+// Rotas servidas pelo aplicativo com os arquivos originais incorporados.
+// O parâmetro renova eventuais imagens antigas no cache do navegador.
+const LOGO_URL = "/identidade/logo.png?v=20261027";
+const MARK_URL = "/identidade/simbolo.png?v=20261027";
 
 const HEIGHTS: Record<NonNullable<BrandLogoProps["size"]>, number> = {
   sm: 26,

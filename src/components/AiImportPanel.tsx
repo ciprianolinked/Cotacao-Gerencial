@@ -16,6 +16,7 @@ type AiStatus = {
   label: string;
   setupUrl: string;
   guideUrl: string;
+  maxTotalUploadBytes?: number | null;
 };
 
 type AiImportPanelProps = {
@@ -98,6 +99,14 @@ export function AiImportPanel({
       setError("Envie os arquivos das propostas ou cole o texto da cotação para analisar.");
       return;
     }
+    if (status?.maxTotalUploadBytes) {
+      const textBytes = new TextEncoder().encode(text + JSON.stringify(hints)).byteLength;
+      const total = files.reduce((sum, file) => sum + file.size, 0) + textBytes + 16 * 1024;
+      if (total > status.maxTotalUploadBytes) {
+        setError("Na Vercel, o limite é de aproximadamente 4 MB por envio, somando todos os arquivos e o texto. Reduza ou divida os documentos e tente novamente.");
+        return;
+      }
+    }
     setLoading(true);
     setError(null);
     setResult(null);
@@ -108,6 +117,9 @@ export function AiImportPanel({
       form.append("text", text);
       form.append("hints", JSON.stringify(hints));
       const response = await fetch("/api/ai/extract", { method: "POST", body: form });
+      if (response.status === 413) {
+        throw new Error("O envio ultrapassou o limite do servidor. Na Vercel, reduza o total dos arquivos para menos de 4 MB e tente novamente.");
+      }
       const data = (await response.json()) as AiExtractionResult & { error?: string };
       if (!response.ok || data.error) throw new Error(data.error || "Não foi possível analisar os documentos.");
       setResult(data);
@@ -211,7 +223,7 @@ export function AiImportPanel({
           </span>
           <p className="mt-3 text-[13px] font-bold text-ink">Arraste aqui as propostas dos fornecedores</p>
           <p className="mt-1 text-[11.5px] text-slate-500">
-            PDF, JPG, PNG ou WEBP · até {MAX_FILES} arquivos · 15 MB por arquivo
+            PDF, JPG, PNG ou WEBP · até {MAX_FILES} arquivos · {status?.maxTotalUploadBytes ? "até 4 MB no total por envio" : "15 MB por arquivo"}
           </p>
           <span className="mt-2.5 inline-flex items-center gap-1 rounded-md bg-white px-2.5 py-1 text-[11px] font-bold text-ink ring-1 ring-line">
             Selecionar arquivos
@@ -282,7 +294,7 @@ export function AiImportPanel({
         <div className="mt-3.5 flex flex-wrap items-center justify-between gap-2">
           <p className="max-w-sm text-[10.5px] leading-snug text-slate-500">
             {status?.connected
-              ? "Os arquivos são enviados apenas ao Google Gemini para gerar este mapa."
+              ? "Os arquivos são enviados ao provedor de IA configurado. Verifique os termos de privacidade antes de enviar dados reais."
               : "Sem a IA ativada, use o texto colado ou preencha manualmente — nada de exemplo é criado."}
           </p>
           <button type="button" onClick={analyze} disabled={loading} className="btn btn-brand">

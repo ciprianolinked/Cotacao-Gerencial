@@ -2,6 +2,7 @@ import { ACCEPTED_UPLOAD_TYPES, CATEGORIES, MAX_FILES, MAX_FILE_BYTES } from "./
 import type { AiExtractionResult, QuotationKind, QuoteItem, Supplier } from "./types";
 import { round2, todayISO, uid } from "./quotation";
 import { getGeminiKey } from "./server/quotations";
+import { createGeminiInteraction, resolveGeminiModel, type GeminiInputPart } from "./server/gemini";
 
 export type UploadInput = {
   name: string;
@@ -56,7 +57,9 @@ type RawExtraction = {
 
 const MAX_CHARS = 60_000;
 
-export const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+// Corrige automaticamente a configuração antiga 2.5 Flash, inclusive quando
+// estava definida em GEMINI_MODEL no ambiente de publicação.
+export const GEMINI_MODEL = resolveGeminiModel(process.env.GEMINI_MODEL);
 export const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4.1-mini";
 
 /**
@@ -231,105 +234,37 @@ async function callGemini(
   text: string,
   hints: ExtractionHints,
 ): Promise<RawExtraction> {
-  const parts: Record<string, unknown>[] = [{ text: buildPrompt(hints) }];
-  if (text.trim()) parts.push({ text: `Texto da cotação (extraído):\n${text.slice(0, MAX_CHARS)}` });
+  const input: GeminiInputPart[] = [{ type: "text", text: buildPrompt(hints) }];
+  if (text.trim()) {
+    input.push({ type: "text", text: `Texto da cotação (extraído):\n${text.slice(0, MAX_CHARS)}` });
+  }
   for (const file of files) {
-    parts.push({
-      inline_data: {
-        mime_type: file.type || "application/pdf",
-        data: file.base64,
-      },
+    const mimeType = file.type === "image/jpg" ? "image/jpeg" : file.type || "application/pdf";
+    input.push({
+      type: mimeType.startsWith("image/") ? "image" : "document",
+      mime_type: mimeType,
+      data: file.base64,
     });
   }
 
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ role: "user", parts }],
-        generationConfig: {
-          temperature: 0.2,
-          responseMimeType: "application/json",
-          responseSchema: toGeminiSchema(RAW_SCHEMA),
-        },
-      }),
-      signal: AbortSignal.timeout(120_000),
-    },
-  );
-
-  if (!response.ok) {
-    const details = await response.text();
-    throw new Error(friendlyGeminiError(response.status, details));
-  }
-
-  const data = (await response.json()) as {
-    candidates?: { content?: { parts?: { text?: string }[] } }[];
-  };
-  const outputText = (data.candidates ?? [])
-    .flatMap((candidate) => candidate.content?.parts ?? [])
-    .map((part) => part.text ?? "")
-    .join("\n");
-
+  const outputText = await createGeminiInteraction({
+    model,
+    apiKey,
+    input,
+    responseSchema: RAW_SCHEMA,
+  });
   return parseJsonLoose(outputText, "Gemini");
 }
 
-function friendlyGeminiError(status: number, details: string): string {
-  if (status === 400 && /API key not valid|API_KEY_INVALID/i.test(details)) {
-    return "A chave do Gemini não é válida. Confira se você copiou a chave inteira no Google AI Studio e salve novamente em Configurar IA.";
-  }
-  if (status === 403) {
-    return "O Google recusou a chave (erro 403). Verifique se a chave está ativa no Google AI Studio e se a API Generative Language está habilitada.";
-  }
-  if (status === 429) {
-    return "Limite gratuito do Gemini atingido no momento. Aguarde alguns minutos e tente de novo — o plano gratuito renova a cota automaticamente.";
-  }
-  if (status >= 500) {
-    return "O serviço do Google está instável agora. Aguarde alguns minutos e tente novamente.";
-  }
-  return `Falha na IA (${status}): ${details.slice(0, 300)}`;
-}
-
-/** Testa uma chave do Gemini com uma chamada mínima e gratuita. */
+/** Testa a chave pela mesma API e modelo usados na leitura das cotações. */
 export async function testGeminiKey(apiKey: string): Promise<{ ok: true; model: string }> {
-  const key = apiKey.trim();
-  if (!key) throw new Error("Informe a chave para testar.");
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(key)}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ role: "user", parts: [{ text: "Responda apenas com a palavra: OK" }] }],
-        generationConfig: { temperature: 0, maxOutputTokens: 10 },
-      }),
-      signal: AbortSignal.timeout(30_000),
-    },
-  );
-  if (!response.ok) {
-    const details = await response.text();
-    throw new Error(friendlyGeminiError(response.status, details));
-  }
+  await createGeminiInteraction({
+    model: GEMINI_MODEL,
+    apiKey,
+    input: [{ type: "text", text: "Responda apenas com a palavra: OK" }],
+    timeoutMs: 45_000,
+  });
   return { ok: true, model: GEMINI_MODEL };
-}
-
-function toGeminiSchema(schema: unknown): unknown {
-  if (Array.isArray(schema)) return schema.map(toGeminiSchema);
-  if (!schema || typeof schema !== "object") return schema;
-  const entries = Object.entries(schema as Record<string, unknown>);
-  const result: Record<string, unknown> = {};
-  for (const [key, value] of entries) {
-    if (key === "additionalProperties" || key === "strict") continue;
-    if (key === "type" && Array.isArray(value)) {
-      const preferred = value.find((entry) => entry !== "null") ?? "string";
-      result.type = preferred;
-      result.nullable = value.includes("null");
-      continue;
-    }
-    result[key] = toGeminiSchema(value);
-  }
-  return result;
 }
 
 function parseJsonLoose(raw: string, provider: string): RawExtraction {
@@ -492,7 +427,7 @@ export async function extractQuotation({
         provider:
           config.provider === "openai"
             ? `OpenAI · ${config.model}`
-            : `Google Gemini (gratuito) · ${config.model}`,
+            : `Google Gemini · ${config.model}`,
         warnings,
         fileSummaries,
       };

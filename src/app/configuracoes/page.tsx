@@ -62,7 +62,7 @@ export default async function ConfiguracoesPage() {
             className="inline-flex items-center gap-1.5 rounded-full bg-ink px-3 py-1.5 text-[10.5px] font-bold text-brand transition hover:bg-ink-soft"
           >
             <SparklesIcon className="h-3.5 w-3.5" />
-            Central de Guias & Publicação
+            Passo a passo ilustrado
             <ArrowRightIcon className="h-3 w-3" />
           </Link>
         </div>
@@ -103,13 +103,13 @@ export default async function ConfiguracoesPage() {
 
             <section className="rounded-xl border border-brand/40 bg-brand-soft px-4 py-3.5">
               <p className="text-[11px] font-extrabold uppercase tracking-[0.1em] text-brand-dark">
-                Quer colocar o site no ar?
+                Primeira vez aqui?
               </p>
               <p className="mt-1 text-[11px] leading-snug text-slate-600">
-                Veja o guia passo a passo para hospedar o app de graça na Vercel com banco Neon e código no GitHub.
+                O guia explica cada clique, o que fazer se der erro e quanto custa (spoiler: nada no plano gratuito).
               </p>
-              <Link href="/ajuda/ia#guia-vercel" className="mt-2 inline-block text-[11px] font-bold text-ink hover:underline">
-                Ver guia Vercel + Neon + GitHub →
+              <Link href="/ajuda/ia" className="mt-2 inline-block text-[11px] font-bold text-ink hover:underline">
+                Abrir guia completo →
               </Link>
             </section>
           </aside>

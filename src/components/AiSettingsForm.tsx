@@ -110,11 +110,11 @@ export function AiSettingsForm({ initial }: { initial: InitialState }) {
               </span>
               <div>
                 <h2 className={`text-[15px] font-extrabold leading-tight ${state.connected ? "" : "text-ink"}`}>
-                  {state.connected ? "IA gratuita ativa" : "IA ainda não ativada"}
+                  {state.connected ? "IA configurada" : "IA ainda não ativada"}
                 </h2>
                 <p className={`text-[11.5px] ${state.connected ? "text-white/65" : "text-slate-500"}`}>
                   {state.connected
-                    ? `${state.provider === "gemini" ? "Google Gemini (gratuito)" : "OpenAI"} · ${state.model}${
+                    ? `${state.provider === "gemini" ? "Google Gemini" : "OpenAI"} · ${state.model}${
                         state.source === "painel" ? " · chave salva no painel" : " · chave do ambiente"
                       }${state.maskedKey ? ` · ${state.maskedKey}` : ""}`
                     : "Cole sua chave gratuita do Google Gemini abaixo para ativar."}
@@ -127,7 +127,7 @@ export function AiSettingsForm({ initial }: { initial: InitialState }) {
               }`}
             >
               <span className={`h-1.5 w-1.5 rounded-full ${state.connected ? "bg-ink-deep" : "bg-amber-500"}`} />
-              {state.connected ? "Funcionando" : "Pendente"}
+              {state.connected ? "Chave cadastrada" : "Pendente"}
             </span>
           </div>
         </div>
@@ -215,20 +215,20 @@ export function AiSettingsForm({ initial }: { initial: InitialState }) {
         <dl className="mt-2 space-y-2.5">
           {[
             {
-              q: "É realmente grátis?",
-              a: "Sim. O Google AI Studio oferece um plano gratuito do Gemini com cota generosa por minuto e por dia — suficiente para a rotina de cotações de condomínios. Se a cota estourar em um pico, basta aguardar alguns minutos.",
+              q: "O Gemini tem opção gratuita?",
+              a: "O Google oferece uma cota gratuita para modelos elegíveis, sujeita a limites e condições. Consulte os preços e a disponibilidade do modelo antes de usar ou ativar faturamento.",
             },
             {
               q: "Preciso informar cartão de crédito?",
-              a: "Não. A chave gratuita é gerada apenas com sua conta Google (Gmail), sem cartão e sem assinatura.",
+              a: "Para usar uma cota gratuita elegível, normalmente basta criar uma chave no Google AI Studio. Confira as condições atuais do seu projeto antes de escolher um plano pago.",
             },
             {
-              q: "Minha chave fica segura?",
-              a: "A chave é guardada no banco de dados do próprio aplicativo e nunca aparece inteira na tela depois de salva. Não a compartilhe com terceiros.",
+              q: "Como devo proteger minha chave?",
+              a: "Uma chave salva aqui fica armazenada no banco do aplicativo e é exibida de forma mascarada. Como esta versão não tem login próprio, proteja todos os endereços antes de usá-la. Na Vercel, prefira a variável Secret GEMINI_API_KEY e não a envie ao GitHub.",
             },
             {
-              q: "O que a IA faz com meus documentos?",
-              a: "Os PDFs e fotos são enviados ao Google somente para extrair fornecedores, itens e valores do mapa. Nada é publicado ou compartilhado.",
+              q: "O que acontece com meus documentos?",
+              a: "Eles são enviados ao provedor configurado. No serviço gratuito do Gemini, o Google informa que pode usar entradas e respostas para melhorar produtos. Não envie dados pessoais, sensíveis ou confidenciais sem avaliar os termos e as regras de privacidade aplicáveis.",
             },
           ].map((entry) => (
             <div key={entry.q} className="rounded-lg bg-paper px-3 py-2.5">

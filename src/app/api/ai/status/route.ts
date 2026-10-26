@@ -18,10 +18,13 @@ export async function GET() {
       config.provider === "none"
         ? "IA não ativada — configure grátis"
         : config.provider === "gemini"
-          ? `Gemini gratuito · ${config.source === "painel" ? "chave do painel" : "chave do ambiente"}`
+          ? `Google Gemini · ${config.source === "painel" ? "chave do painel" : "chave do ambiente"}`
           : `OpenAI · ${config.model}`,
     setupUrl: "/configuracoes",
     guideUrl: "/ajuda/ia",
+    // As funções da Vercel aceitam até 4,5 MB por requisição. Reservamos
+    // margem para os campos e cabeçalhos do formulário multipart.
+    maxTotalUploadBytes: process.env.VERCEL === "1" ? 4 * 1024 * 1024 : null,
     accepts: ["application/pdf", "image/jpeg", "image/png", "image/webp"],
   });
 }

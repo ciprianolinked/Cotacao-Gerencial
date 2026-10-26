@@ -1,31 +1,19 @@
 # Identidade visual Gerencial
 
-Este aplicativo usa a identidade oficial da Gerencial (gerencialcond.com.br), **sem redesenho**:
+O aplicativo utiliza os arquivos originais da Gerencial, sem redesenho:
 
-- `gerencial-logo.png` — logo horizontal oficial (texto branco + ouro), usado no cabeçalho do
-  site e no documento do Mapa de Cotação, sempre sobre o azul-marinho institucional.
-- `gerencial-simbolo.png` — símbolo oficial, usado como favicon/ícone do app.
+- `gerencial-logo.png`: logotipo horizontal oficial.
+- `gerencial-simbolo.png`: símbolo oficial.
 
-## Cores oficiais
+Para evitar imagens quebradas quando o projeto for publicado, cópias dos arquivos originais estão incorporadas em `src/lib/brand-assets.ts`. O site serve essas cópias pelas rotas `/identidade/logo.png` e `/identidade/simbolo.png`. O favicon `/favicon.ico` usa o símbolo original redimensionado para 16, 32, 48 e 64 pixels.
 
-| Token          | Valor     | Uso                                        |
-| -------------- | --------- | ------------------------------------------ |
-| `--color-ink`  | `#181447` | azul-marinho institucional (fundos escuros)|
-| `--color-brand`| `#FAB12A` | ouro Gerencial (destaques, botões)         |
-| `--color-brand-dark` | `#8A5C00` | ouro escuro (textos pequenos sobre claro) |
-| `--color-success` | `#0E4828` | verde institucional (melhor preço, êxito) |
-| `--color-paper`| `#F6F4EE` | fundo das telas                            |
-| `--color-line` | `#E3E0D3` | linhas e bordas                            |
+Se a marca oficial for atualizada, atualize os PNGs e regenere o arquivo incorporado e o favicon; trocar apenas os PNGs nesta pasta não altera as cópias incorporadas.
 
-## Tipografia
+## Identidade visual
 
-Arial (a mesma do site institucional), com títulos em negrito. Sem fontes externas: o app
-carrega mais rápido e funciona até offline na intranet.
+- Azul-marinho: `#181447`.
+- Ouro: `#FAB12A`.
+- Verde de apoio: `#0E4828`.
+- Tipografia da interface: Arial.
 
-## Regra do logo
-
-O logo oficial tem texto branco: **nunca o exiba sobre fundo branco**. O componente
-`BrandLogo` já cuida disso — usa placa azul-marinho (`treatment="plate"`, padrão) ou é
-posicionado sobre faixas escuras (`treatment="bare"`).
-
-Para trocar o arquivo do logo, substitua `gerencial-logo.png` mantendo o mesmo nome.
+O logo horizontal tem letras brancas e deve ser exibido sobre o fundo azul-marinho institucional.

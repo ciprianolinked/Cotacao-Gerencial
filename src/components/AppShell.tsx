@@ -42,7 +42,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                 Configurar IA
               </Link>
               <Link
-                href="/ajuda/ia"
+                href="/ajuda"
                 className="rounded-lg px-3 py-2 text-[13px] font-semibold text-white/75 transition hover:bg-white/10 hover:text-white"
               >
                 Ajuda
@@ -50,6 +50,9 @@ export function AppShell({ children }: { children: ReactNode }) {
             </nav>
           </div>
           <div className="flex items-center gap-2">
+            <Link href="/ajuda" className="rounded-lg px-2 py-2 text-[12px] font-semibold text-white/80 hover:bg-white/10 md:hidden">
+              Ajuda
+            </Link>
             <Link
               href="/ajuda/ia"
               className="hidden items-center gap-1.5 rounded-full bg-white/10 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.12em] text-brand transition hover:bg-white/15 lg:inline-flex"
