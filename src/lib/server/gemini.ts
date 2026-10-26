@@ -1,6 +1,9 @@
 const GEMINI_INTERACTIONS_URL = "https://generativelanguage.googleapis.com/v1beta/interactions";
 
 export const DEFAULT_GEMINI_MODEL = "gemini-3.8-flash";
+// A leitura de várias propostas pode demorar mesmo quando os arquivos são pequenos.
+// Deixamos margem para a função concluir e enviar a resposta antes dos 240 segundos.
+export const GEMINI_ANALYSIS_TIMEOUT_MS = 210_000;
 
 /** Mantém configurações personalizadas, mas substitui o modelo antigo indisponível. */
 export function resolveGeminiModel(configuredModel?: string): string {
@@ -55,15 +58,15 @@ export async function createGeminiInteraction({
   apiKey,
   input,
   responseSchema,
-  generationConfig,
-  timeoutMs = 120_000,
+  timeoutMs = GEMINI_ANALYSIS_TIMEOUT_MS,
+  signal,
 }: {
   model: string;
   apiKey: string;
   input: GeminiInputPart[];
   responseSchema?: unknown;
-  generationConfig?: Record<string, unknown>;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<string> {
   const key = apiKey.trim();
   if (!key) throw new Error("Informe a chave do Gemini em Configurar IA.");
@@ -75,6 +78,11 @@ export async function createGeminiInteraction({
     // Esta análise não precisa manter o histórico da interação no Google.
     store: false,
   };
+  // Gemini 3 aceita "low" e o Google o recomenda para reduzir a latência.
+  // Não se aplica a modelos personalizados de outras gerações.
+  if (/^gemini-3(?:\.|-)/i.test(resolvedModel)) {
+    body.generation_config = { thinking_level: "low" };
+  }
   if (responseSchema) {
     body.response_format = {
       type: "text",
@@ -82,35 +90,29 @@ export async function createGeminiInteraction({
       schema: responseSchema,
     };
   }
-  if (generationConfig) {
-    body.generation_config = generationConfig;
-  }
 
-  const startedAt = Date.now();
-  const fileCount = input.filter((part) => part.type !== "text").length;
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  const requestSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
+  const timeoutMessage =
+    "O Gemini não respondeu dentro do tempo disponível. Os arquivos continuam selecionados; tente novamente. Se o problema persistir, confira o status e a cota do Google AI Studio.";
+
   let response: Response;
   try {
     response = await fetch(GEMINI_INTERACTIONS_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-goog-api-key": key },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: requestSignal,
     });
   } catch (error) {
-    const waited = Math.round((Date.now() - startedAt) / 1000);
-    console.error(
-      `[gemini] timeout após ${waited}s · modelo ${resolvedModel} · ${fileCount} arquivo(s) · limite ${Math.round(timeoutMs / 1000)}s`,
-    );
-    if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
-      throw new Error(
-        `O Google Gemini não respondeu em ${waited}s. Isso não tem a ver com o tamanho dos arquivos: tente com 1 PDF primeiro para isolar o problema. Se 1 arquivo funcionar, envie os demais em seguida. Se nem 1 funcionar, confira a cota do projeto no Google AI Studio ou tente novamente em alguns minutos.`,
-      );
+    if (signal?.aborted) {
+      throw new Error("Análise cancelada. Os arquivos continuam selecionados.");
+    }
+    if (timeoutSignal.aborted || (error instanceof Error && error.name === "TimeoutError")) {
+      throw new Error(timeoutMessage);
     }
     throw new Error("Não foi possível conectar ao Google Gemini. Verifique a conexão e tente novamente.");
   }
-  console.log(
-    `[gemini] resposta em ${Math.round((Date.now() - startedAt) / 1000)}s · modelo ${resolvedModel} · ${fileCount} arquivo(s) · http ${response.status}`,
-  );
 
   if (!response.ok) {
     const details = await response.text().catch(() => "");
@@ -121,6 +123,8 @@ export async function createGeminiInteraction({
   try {
     result = (await response.json()) as InteractionResponse;
   } catch {
+    if (signal?.aborted) throw new Error("Análise cancelada. Os arquivos continuam selecionados.");
+    if (timeoutSignal.aborted) throw new Error(timeoutMessage);
     throw new Error("O Google Gemini retornou uma resposta inválida. Tente novamente.");
   }
 

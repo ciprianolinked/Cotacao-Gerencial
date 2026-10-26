@@ -59,6 +59,11 @@ const STEPS = [
 
 const ERRORS = [
   {
+    symptom: "“O Gemini não respondeu dentro do tempo disponível”",
+    cause: "A leitura de vários documentos depende do número de páginas, da complexidade e da disponibilidade do Google, não apenas do tamanho dos PDFs.",
+    fix: "Os arquivos continuam selecionados. Tente a análise novamente; se o erro persistir, confira o status e os limites do seu projeto no Google AI Studio. Na Vercel, publique a versão atual do aplicativo e confirme que o Fluid Compute está ativo.",
+  },
+  {
     symptom: "“A chave do Gemini não é válida”",
     cause: "A chave foi colada incompleta ou com espaço a mais no início/fim.",
     fix: "Volte ao AI Studio, copie de novo com o botão de copiar e cole novamente. Confira se começa com “AIza”.",

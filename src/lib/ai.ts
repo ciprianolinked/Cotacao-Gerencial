@@ -179,6 +179,7 @@ async function callOpenAI(
   files: UploadInput[],
   text: string,
   hints: ExtractionHints,
+  signal?: AbortSignal,
 ): Promise<RawExtraction> {
   const content: Record<string, unknown>[] = [{ type: "input_text", text: buildPrompt(hints) }];
   if (text.trim()) {
@@ -205,7 +206,9 @@ async function callOpenAI(
         format: { type: "json_schema", name: "mapa_cotacao", schema: RAW_SCHEMA, strict: false },
       },
     }),
-    signal: AbortSignal.timeout(120_000),
+    signal: signal
+      ? AbortSignal.any([signal, AbortSignal.timeout(210_000)])
+      : AbortSignal.timeout(210_000),
   });
 
   if (!response.ok) {
@@ -233,6 +236,7 @@ async function callGemini(
   files: UploadInput[],
   text: string,
   hints: ExtractionHints,
+  signal?: AbortSignal,
 ): Promise<RawExtraction> {
   const input: GeminiInputPart[] = [{ type: "text", text: buildPrompt(hints) }];
   if (text.trim()) {
@@ -252,10 +256,7 @@ async function callGemini(
     apiKey,
     input,
     responseSchema: RAW_SCHEMA,
-    // Extração estruturada não precisa de raciocínio longo: "low" reduz bastante a latência.
-    generationConfig: { thinking_level: "low", max_output_tokens: 32768 },
-    // Fica abaixo do limite de 300 s da função, para devolver uma mensagem clara.
-    timeoutMs: 270_000,
+    signal,
   });
   return parseJsonLoose(outputText, "Gemini");
 }
@@ -266,7 +267,6 @@ export async function testGeminiKey(apiKey: string): Promise<{ ok: true; model: 
     model: GEMINI_MODEL,
     apiKey,
     input: [{ type: "text", text: "Responda apenas com a palavra: OK" }],
-    generationConfig: { thinking_level: "low", max_output_tokens: 50 },
     timeoutMs: 45_000,
   });
   return { ok: true, model: GEMINI_MODEL };
@@ -401,10 +401,12 @@ export async function extractQuotation({
   files,
   text,
   hints,
+  signal,
 }: {
   files: UploadInput[];
   text: string;
   hints: ExtractionHints;
+  signal?: AbortSignal;
 }): Promise<AiExtractionResult> {
   const config = await getAiConfig();
   const warnings: string[] = [];
@@ -417,9 +419,9 @@ export async function extractQuotation({
     try {
       const raw =
         config.provider === "openai" && config.openaiKey
-          ? await callOpenAI(config.model, config.openaiKey, files, text, hints)
+          ? await callOpenAI(config.model, config.openaiKey, files, text, hints, signal)
           : config.geminiKey
-            ? await callGemini(config.model, config.geminiKey, files, text, hints)
+            ? await callGemini(config.model, config.geminiKey, files, text, hints, signal)
             : null;
       if (!raw) throw new Error("Chave de IA indisponível.");
       const mapped = mapRaw(raw, hints, "ia");
@@ -439,8 +441,13 @@ export async function extractQuotation({
     } catch (error) {
       const message = error instanceof Error ? error.message : "Erro desconhecido na análise de IA.";
       warnings.push(message);
-      if (!text.trim()) throw new Error(message);
+      // Não apresentar texto local como se os PDFs tivessem sido lidos pela IA.
+      if (signal?.aborted || files.length > 0 || !text.trim()) throw new Error(message);
     }
+  }
+
+  if (files.length > 0 && config.provider === "none") {
+    throw new Error(NO_AI_MESSAGE);
   }
 
   if (text.trim()) {

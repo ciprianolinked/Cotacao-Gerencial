@@ -1,10 +1,12 @@
 import { NextResponse } from "next/server";
 import { extractQuotation, validateUploads, type ExtractionHints, type UploadInput } from "@/lib/ai";
+import { createAiAnalysisStream } from "@/lib/server/analysis-stream";
 import { ACCEPTED_UPLOAD_TYPES, MAX_FILES, MAX_FILE_BYTES } from "@/lib/constants";
 
 export const runtime = "nodejs";
-// Três ou mais PDFs podem levar alguns minutos no Gemini. 300 s é o máximo do plano Hobby da Vercel.
-export const maxDuration = 300;
+// Fluid Compute permite uma espera maior sem interromper análises de vários PDFs.
+// O limite do Gemini é menor (210s), reservando tempo para entregar a resposta.
+export const maxDuration = 240;
 
 export async function POST(request: Request) {
   try {
@@ -56,20 +58,33 @@ export async function POST(request: Request) {
 
     if (files.length === 0 && !text.trim()) {
       return NextResponse.json(
-        {
-          error:
-            rejected[0] ??
-            "Envie ao menos um arquivo PDF/imagem ou cole o texto da cotação para a análise.",
-        },
+        { error: rejected[0] ?? "Envie ao menos um arquivo PDF/imagem ou cole o texto da cotação para a análise." },
         { status: 400 },
       );
     }
 
-    const extraction = await extractQuotation({ files, text, hints });
-    return NextResponse.json({
-      ...extraction,
-      warnings: [...rejected, ...extraction.warnings],
-    });
+    // Não produzir um mapa parcial se algum arquivo não pôde ser processado.
+    if (rejected.length > 0) {
+      return NextResponse.json({ error: rejected.join(" ") }, { status: 400 });
+    }
+
+    async function runAnalysis(signal: AbortSignal) {
+      return extractQuotation({ files, text, hints, signal });
+    }
+
+    if (new URL(request.url).searchParams.get("stream") === "1") {
+      return new Response(createAiAnalysisStream(runAnalysis, { signal: request.signal }), {
+        headers: {
+          "Content-Type": "application/x-ndjson; charset=utf-8",
+          "Cache-Control": "no-store, no-transform",
+          "X-Accel-Buffering": "no",
+          "X-Content-Type-Options": "nosniff",
+        },
+      });
+    }
+
+    // Mantém a resposta JSON para integrações existentes.
+    return NextResponse.json(await runAnalysis(request.signal));
   } catch (error) {
     const message = error instanceof Error ? error.message : "Não foi possível analisar os documentos.";
     return NextResponse.json({ error: message }, { status: 500 });
