@@ -55,19 +55,22 @@ export async function createGeminiInteraction({
   apiKey,
   input,
   responseSchema,
+  generationConfig,
   timeoutMs = 120_000,
 }: {
   model: string;
   apiKey: string;
   input: GeminiInputPart[];
   responseSchema?: unknown;
+  generationConfig?: Record<string, unknown>;
   timeoutMs?: number;
 }): Promise<string> {
   const key = apiKey.trim();
   if (!key) throw new Error("Informe a chave do Gemini em Configurar IA.");
 
+  const resolvedModel = resolveGeminiModel(model);
   const body: Record<string, unknown> = {
-    model: resolveGeminiModel(model),
+    model: resolvedModel,
     input,
     // Esta análise não precisa manter o histórico da interação no Google.
     store: false,
@@ -79,7 +82,12 @@ export async function createGeminiInteraction({
       schema: responseSchema,
     };
   }
+  if (generationConfig) {
+    body.generation_config = generationConfig;
+  }
 
+  const startedAt = Date.now();
+  const fileCount = input.filter((part) => part.type !== "text").length;
   let response: Response;
   try {
     response = await fetch(GEMINI_INTERACTIONS_URL, {
@@ -89,11 +97,20 @@ export async function createGeminiInteraction({
       signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (error) {
+    const waited = Math.round((Date.now() - startedAt) / 1000);
+    console.error(
+      `[gemini] timeout após ${waited}s · modelo ${resolvedModel} · ${fileCount} arquivo(s) · limite ${Math.round(timeoutMs / 1000)}s`,
+    );
     if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
-      throw new Error("A análise do Gemini demorou mais que o esperado. Tente novamente com arquivos menores.");
+      throw new Error(
+        `O Google Gemini não respondeu em ${waited}s. Isso não tem a ver com o tamanho dos arquivos: tente com 1 PDF primeiro para isolar o problema. Se 1 arquivo funcionar, envie os demais em seguida. Se nem 1 funcionar, confira a cota do projeto no Google AI Studio ou tente novamente em alguns minutos.`,
+      );
     }
     throw new Error("Não foi possível conectar ao Google Gemini. Verifique a conexão e tente novamente.");
   }
+  console.log(
+    `[gemini] resposta em ${Math.round((Date.now() - startedAt) / 1000)}s · modelo ${resolvedModel} · ${fileCount} arquivo(s) · http ${response.status}`,
+  );
 
   if (!response.ok) {
     const details = await response.text().catch(() => "");

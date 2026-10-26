@@ -82,6 +82,8 @@ export function AiImportPanel({
   const [estimate, setEstimate] = useState(0);
   const [elapsed, setElapsed] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const xhrRef = useRef<XMLHttpRequest | null>(null);
+  const cancelledRef = useRef(false);
 
   useEffect(() => {
     let active = true;
@@ -141,6 +143,8 @@ export function AiImportPanel({
     setResult(null);
     setStage(0);
     setProgress(0);
+    setElapsed(0);
+    cancelledRef.current = false;
 
     // Estimativa do tempo de processamento da IA (segundos), baseada no volume enviado.
     const totalMb = files.reduce((sum, file) => sum + file.size, 0) / (1024 * 1024);
@@ -158,6 +162,7 @@ export function AiImportPanel({
 
       const { status, body } = await new Promise<{ status: number; body: string }>((resolve, reject) => {
         const xhr = new XMLHttpRequest();
+        xhrRef.current = xhr;
         xhr.open("POST", "/api/ai/extract");
         xhr.timeout = 320_000;
         // Envio dos arquivos: 0% a 20%.
@@ -176,7 +181,11 @@ export function AiImportPanel({
           }, 500);
         };
         xhr.onload = () => resolve({ status: xhr.status, body: xhr.responseText });
-        xhr.onerror = () => reject(new Error("Falha de conexão durante o envio. Verifique a internet e tente novamente."));
+        xhr.onabort = () => reject(new Error("__CANCELLED__"));
+        xhr.onerror = () => {
+          if (cancelledRef.current) reject(new Error("__CANCELLED__"));
+          else reject(new Error("Falha de conexão durante o envio. Verifique a internet e tente novamente."));
+        };
         xhr.ontimeout = () => reject(new Error("A análise demorou demais. Envie menos arquivos por vez ou PDFs menores."));
         xhr.send(form);
       });
@@ -186,11 +195,23 @@ export function AiImportPanel({
       setResult(data);
       setApplied(false);
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "Erro inesperado na análise.");
+      const message = requestError instanceof Error ? requestError.message : "Erro inesperado na análise.";
+      if (message === "__CANCELLED__") {
+        setError("Análise cancelada. Dica: teste com 1 PDF para descobrir se o problema é um arquivo específico.");
+        setProgress(0);
+      } else {
+        setError(message);
+      }
     } finally {
       if (ticker) clearInterval(ticker);
+      xhrRef.current = null;
       setLoading(false);
     }
+  }
+
+  function cancel() {
+    cancelledRef.current = true;
+    xhrRef.current?.abort();
   }
 
   function apply() {
@@ -390,6 +411,13 @@ export function AiImportPanel({
                   ? `Tempo estimado restante: cerca de ${Math.max(1, estimate - elapsed)} s (decorrido ${elapsed} s).`
                   : `Finalizando a leitura — documentos maiores podem levar mais tempo (decorrido ${elapsed} s).`}
             </p>
+            <button
+              type="button"
+              onClick={cancel}
+              className="btn btn-ghost mt-2 w-full !py-1.5"
+            >
+              Cancelar análise
+            </button>
           </div>
         )}
 

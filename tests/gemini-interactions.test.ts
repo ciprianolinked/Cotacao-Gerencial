@@ -23,6 +23,7 @@ test("envia texto, PDF e imagem à API Interactions com resposta estruturada", a
     const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
     assert.equal(body.model, "gemini-3.8-flash");
     assert.equal(body.store, false);
+    assert.deepEqual(body.generation_config, { thinking_level: "low", max_output_tokens: 32768 });
     assert.deepEqual(body.response_format, { type: "text", mime_type: "application/json", schema });
     assert.deepEqual(body.input, [
       { type: "text", text: "Analisar propostas" },
@@ -48,6 +49,7 @@ test("envia texto, PDF e imagem à API Interactions com resposta estruturada", a
         { type: "image", mime_type: "image/jpeg", data: "anBn" },
       ],
       responseSchema: schema,
+      generationConfig: { thinking_level: "low", max_output_tokens: 32768 },
     });
     assert.equal(result, '{"suppliers":[]}');
     assert.equal(called, true);
@@ -138,6 +140,8 @@ test("o teste de chave e a extração usam o mesmo modelo e a mesma API", async 
     assert.equal(requests.length, 2);
     assert.equal(requests[0].model, "gemini-3.8-flash");
     assert.equal(requests[1].model, "gemini-3.8-flash");
+    // Extração usa raciocínio leve para responder mais rápido.
+    assert.deepEqual(requests[1].generation_config, { thinking_level: "low", max_output_tokens: 32768 });
     assert.ok(Array.isArray(requests[1].input));
     const input = requests[1].input as Array<{ type: string; mime_type?: string }>;
     assert.ok(input.some((part) => part.type === "document" && part.mime_type === "application/pdf"));

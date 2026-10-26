@@ -252,6 +252,8 @@ async function callGemini(
     apiKey,
     input,
     responseSchema: RAW_SCHEMA,
+    // Extração estruturada não precisa de raciocínio longo: "low" reduz bastante a latência.
+    generationConfig: { thinking_level: "low", max_output_tokens: 32768 },
     // Fica abaixo do limite de 300 s da função, para devolver uma mensagem clara.
     timeoutMs: 270_000,
   });
@@ -264,6 +266,7 @@ export async function testGeminiKey(apiKey: string): Promise<{ ok: true; model: 
     model: GEMINI_MODEL,
     apiKey,
     input: [{ type: "text", text: "Responda apenas com a palavra: OK" }],
+    generationConfig: { thinking_level: "low", max_output_tokens: 50 },
     timeoutMs: 45_000,
   });
   return { ok: true, model: GEMINI_MODEL };
