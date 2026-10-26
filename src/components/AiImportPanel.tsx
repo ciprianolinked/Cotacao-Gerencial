@@ -170,7 +170,12 @@ export function AiImportPanel({
     ? "Enviando documentos ao servidor…"
     : phase === "recebido"
       ? "Documentos recebidos. Preparando análise…"
-      : "Aguardando o resultado da análise da IA…";
+      : phase === "tentando_novamente"
+        ? "A conexão com o Google falhou. Tentando novamente…"
+        : phase === "alternativa"
+          ? "Tentando uma alternativa compatível do Gemini…"
+          : "Aguardando o resultado da análise da IA…";
+  const showGoogleHelp = error !== null && /Google|Gemini|cota/i.test(error);
 
   return (
     <section className={`card overflow-hidden ${variant === "hero" ? "ring-1 ring-brand/40" : ""}`}>
@@ -331,13 +336,25 @@ export function AiImportPanel({
         {error && (
           <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2.5">
             <p className="text-[12px] font-bold leading-snug text-red-700">{error}</p>
-            {showSetupHint && (
+            {(showSetupHint || showGoogleHelp) && (
               <div className="mt-2 flex flex-wrap gap-2">
-                <Link href="/configuracoes" className="btn btn-brand !py-1.5">
-                  Configurar IA agora
-                </Link>
+                {showSetupHint && (
+                  <Link href="/configuracoes" className="btn btn-brand !py-1.5">
+                    Configurar IA
+                  </Link>
+                )}
+                {showGoogleHelp && (
+                  <>
+                    <a href="https://aistudio.google.com/status" target="_blank" rel="noopener noreferrer" className="btn btn-ghost !py-1.5">
+                      Status do Google ↗
+                    </a>
+                    <a href="https://aistudio.google.com/usage" target="_blank" rel="noopener noreferrer" className="btn btn-ghost !py-1.5">
+                      Verificar cota ↗
+                    </a>
+                  </>
+                )}
                 <Link href="/ajuda/ia" className="btn btn-ghost !py-1.5">
-                  Ver passo a passo
+                  Ver ajuda
                 </Link>
               </div>
             )}

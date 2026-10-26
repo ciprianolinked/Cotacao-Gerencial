@@ -142,6 +142,49 @@ test("três PDFs pequenos são comparados juntos em uma única análise", { time
   }
 });
 
+test("falha do Google aciona alternativa sem perder os três PDFs", { timeout: 10_000 }, async () => {
+  const previousKey = process.env.GEMINI_API_KEY;
+  const originalFetch = globalThis.fetch;
+  process.env.GEMINI_API_KEY = "chave-ficticia-sem-custo";
+  let calls = 0;
+  const counts: number[] = [];
+  globalThis.fetch = async (url, init) => {
+    calls += 1;
+    const body = JSON.parse(String(init?.body)) as {
+      input?: Array<{ type: string }>;
+      contents?: Array<{ parts: Array<Record<string, unknown>> }>;
+    };
+    counts.push(body.input ? body.input.filter((part) => part.type === "document").length : body.contents?.[0].parts.filter((part) => "inlineData" in part).length ?? 0);
+    if (calls < 4) return new Response("indisponível", { status: 503 });
+    assert.match(String(url), /gemini-3\.1-flash-lite:generateContent$/);
+    const raw = {
+      suppliers: [{ name: "Fornecedor A" }, { name: "Fornecedor B" }, { name: "Fornecedor C" }],
+      items: [{ description: "Manutenção", unit: "serviço", quantity: 1, prices: [300, 250, 275] }],
+    };
+    return Response.json({ candidates: [{ finishReason: "STOP", content: { parts: [{ text: JSON.stringify(raw) }] } }] });
+  };
+  try {
+    const { POST } = await import("../src/app/api/ai/extract/route");
+    const form = new FormData();
+    for (let index = 1; index <= 3; index++) {
+      form.append("files", new File([new Uint8Array(250 * 1024)], `proposta-${index}.pdf`, { type: "application/pdf" }));
+    }
+    const response = await POST(new Request("http://localhost/api/ai/extract?stream=1", { method: "POST", body: form }));
+    const phases: string[] = [];
+    const result = await readAiAnalysisResponse(response, (phase) => phases.push(phase));
+    assert.deepEqual(counts, [3, 3, 3, 3]);
+    assert.deepEqual(phases, ["recebido", "analisando", "tentando_novamente", "alternativa", "alternativa"]);
+    assert.equal(result.draft.suppliers.length, 3);
+    assert.match(result.provider, /gemini-3\.1-flash-lite/);
+    assert.ok(result.warnings.some((warning) => /modelo principal estava indisponível/i.test(warning)));
+    assert.deepEqual(result.draft.suppliers.map((supplier) => result.draft.items[0].prices[supplier.id]), [300, 250, 275]);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (previousKey === undefined) delete process.env.GEMINI_API_KEY;
+    else process.env.GEMINI_API_KEY = previousKey;
+  }
+});
+
 test("três PDFs permanecem na mesma análise após mais de 52 segundos", {
   timeout: 65_000,
   skip: process.env.RUN_SLOW_AI_TEST !== "1",

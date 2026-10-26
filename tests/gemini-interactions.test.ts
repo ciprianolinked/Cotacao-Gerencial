@@ -66,11 +66,12 @@ test("mostra orientação amigável quando o modelo não está disponível", asy
         model: "gemini-3.8-flash",
         apiKey: "chave-de-teste",
         input: [{ type: "text", text: "Teste" }],
+        retryBaseDelayMs: 0,
       }),
       (error: unknown) => {
         assert.ok(error instanceof Error);
         assert.match(error.message, /modelo Gemini configurado não está disponível/i);
-        assert.match(error.message, /gemini-3\.8-flash/);
+        assert.match(error.message, /Google AI Studio/);
         assert.doesNotMatch(error.message, /detalhes privados|chave-de-teste/);
         return true;
       },

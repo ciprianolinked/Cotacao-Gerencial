@@ -1,4 +1,4 @@
-import type { AiAnalysisEvent } from "@/lib/ai-stream";
+import type { AiAnalysisEvent, AiAnalysisPhase } from "@/lib/ai-stream";
 import type { AiExtractionResult } from "@/lib/types";
 
 /**
@@ -6,7 +6,7 @@ import type { AiExtractionResult } from "@/lib/types";
  * apenas quando o processamento terminar. Não salva os documentos nem a chave.
  */
 export function createAiAnalysisStream(
-  run: (signal: AbortSignal) => Promise<AiExtractionResult>,
+  run: (signal: AbortSignal, onPhase: (phase: AiAnalysisPhase) => void) => Promise<AiExtractionResult>,
   options: { signal?: AbortSignal; heartbeatMs?: number } = {},
 ): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
@@ -40,7 +40,7 @@ export function createAiAnalysisStream(
       heartbeat = setInterval(() => send({ type: "heartbeat" }), options.heartbeatMs ?? 8_000);
 
       void Promise.resolve()
-        .then(() => run(operationSignal))
+        .then(() => run(operationSignal, (phase) => send({ type: "progress", phase })))
         .then((result) => send({ type: "result", result }))
         .catch((error: unknown) => {
           const message = error instanceof Error ? error.message : "Não foi possível concluir a análise.";

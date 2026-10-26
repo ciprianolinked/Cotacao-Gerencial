@@ -20,6 +20,7 @@ O Neon criado para a publicação é um banco novo. Mapas já existentes em outr
 - GitHub, Neon e Gemini oferecem opções gratuitas sujeitas a limites e condições vigentes. Confira os valores e termos nos sites oficiais.
 - Nas Vercel Functions, o corpo de cada requisição tem limite de 4,5 MB. Neste aplicativo, mantenha o total dos arquivos e texto abaixo de aproximadamente 4 MB por envio.
 - A análise de múltiplas propostas usa Fluid Compute e pode durar alguns minutos, mesmo com arquivos pequenos. A porcentagem mostrada é apenas estimativa; o resultado só é concluído quando o provedor retorna.
+- Erros transitórios do Gemini recebem tentativas limitadas com espera. Se necessário, é usada uma API ou modelo multimodal alternativo do próprio Google, com aviso no resultado. Cotas, custos e privacidade seguem as condições do projeto Google; erros de chave ou cota diária não são repetidos indefinidamente.
 - Na versão atual, o banco guarda os dados dos mapas e os metadados dos anexos, mas não os PDFs ou imagens originais. Guarde os documentos originais em local seguro.
 - Nos serviços gratuitos do Gemini, o Google informa que pode usar conteúdo e respostas para melhorar produtos. Não envie dados pessoais, sensíveis ou confidenciais sem avaliar os termos e as regras aplicáveis.
 

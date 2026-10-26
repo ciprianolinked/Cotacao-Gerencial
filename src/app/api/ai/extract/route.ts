@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { extractQuotation, validateUploads, type ExtractionHints, type UploadInput } from "@/lib/ai";
 import { createAiAnalysisStream } from "@/lib/server/analysis-stream";
+import type { AiAnalysisPhase } from "@/lib/ai-stream";
 import { ACCEPTED_UPLOAD_TYPES, MAX_FILES, MAX_FILE_BYTES } from "@/lib/constants";
 
 export const runtime = "nodejs";
@@ -68,8 +69,8 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: rejected.join(" ") }, { status: 400 });
     }
 
-    async function runAnalysis(signal: AbortSignal) {
-      return extractQuotation({ files, text, hints, signal });
+    async function runAnalysis(signal: AbortSignal, onPhase?: (phase: AiAnalysisPhase) => void) {
+      return extractQuotation({ files, text, hints, signal, onPhase });
     }
 
     if (new URL(request.url).searchParams.get("stream") === "1") {

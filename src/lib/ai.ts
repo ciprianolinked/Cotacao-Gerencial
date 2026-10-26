@@ -2,7 +2,8 @@ import { ACCEPTED_UPLOAD_TYPES, CATEGORIES, MAX_FILES, MAX_FILE_BYTES } from "./
 import type { AiExtractionResult, QuotationKind, QuoteItem, Supplier } from "./types";
 import { round2, todayISO, uid } from "./quotation";
 import { getGeminiKey } from "./server/quotations";
-import { createGeminiInteraction, resolveGeminiModel, type GeminiInputPart } from "./server/gemini";
+import { createGeminiInteractionDetailed, resolveGeminiModel, type GeminiInputPart } from "./server/gemini";
+import type { AiAnalysisPhase } from "./ai-stream";
 
 export type UploadInput = {
   name: string;
@@ -237,7 +238,8 @@ async function callGemini(
   text: string,
   hints: ExtractionHints,
   signal?: AbortSignal,
-): Promise<RawExtraction> {
+  onPhase?: (phase: AiAnalysisPhase) => void,
+): Promise<{ raw: RawExtraction; model: string; usedAlternative: boolean; switchedModel: boolean }> {
   const input: GeminiInputPart[] = [{ type: "text", text: buildPrompt(hints) }];
   if (text.trim()) {
     input.push({ type: "text", text: `Texto da cotação (extraído):\n${text.slice(0, MAX_CHARS)}` });
@@ -251,25 +253,26 @@ async function callGemini(
     });
   }
 
-  const outputText = await createGeminiInteraction({
+  const result = await createGeminiInteractionDetailed({
     model,
     apiKey,
     input,
     responseSchema: RAW_SCHEMA,
     signal,
+    onRetry: (phase) => onPhase?.(phase === "retrying" ? "tentando_novamente" : "alternativa"),
   });
-  return parseJsonLoose(outputText, "Gemini");
+  return { ...result, raw: parseJsonLoose(result.text, "Gemini") };
 }
 
 /** Testa a chave pela mesma API e modelo usados na leitura das cotações. */
 export async function testGeminiKey(apiKey: string): Promise<{ ok: true; model: string }> {
-  await createGeminiInteraction({
+  const result = await createGeminiInteractionDetailed({
     model: GEMINI_MODEL,
     apiKey,
     input: [{ type: "text", text: "Responda apenas com a palavra: OK" }],
     timeoutMs: 45_000,
   });
-  return { ok: true, model: GEMINI_MODEL };
+  return { ok: true, model: result.model };
 }
 
 function parseJsonLoose(raw: string, provider: string): RawExtraction {
@@ -402,11 +405,13 @@ export async function extractQuotation({
   text,
   hints,
   signal,
+  onPhase,
 }: {
   files: UploadInput[];
   text: string;
   hints: ExtractionHints;
   signal?: AbortSignal;
+  onPhase?: (phase: AiAnalysisPhase) => void;
 }): Promise<AiExtractionResult> {
   const config = await getAiConfig();
   const warnings: string[] = [];
@@ -417,13 +422,22 @@ export async function extractQuotation({
 
   if (config.provider !== "none") {
     try {
-      const raw =
-        config.provider === "openai" && config.openaiKey
-          ? await callOpenAI(config.model, config.openaiKey, files, text, hints, signal)
-          : config.geminiKey
-            ? await callGemini(config.model, config.geminiKey, files, text, hints, signal)
-            : null;
-      if (!raw) throw new Error("Chave de IA indisponível.");
+      let raw: RawExtraction;
+      let usedModel = config.model;
+      if (config.provider === "openai" && config.openaiKey) {
+        raw = await callOpenAI(config.model, config.openaiKey, files, text, hints, signal);
+      } else if (config.geminiKey) {
+        const result = await callGemini(config.model, config.geminiKey, files, text, hints, signal, onPhase);
+        raw = result.raw;
+        usedModel = result.model;
+        if (result.switchedModel) {
+          warnings.push(`O modelo principal estava indisponível; a análise usou ${result.model}, também do Google. Revise os dados extraídos antes de salvar.`);
+        } else if (result.usedAlternative) {
+          warnings.push("A análise foi concluída após uma nova tentativa de conexão com o Google. Revise os dados antes de salvar.");
+        }
+      } else {
+        throw new Error("Chave de IA indisponível.");
+      }
       const mapped = mapRaw(raw, hints, "ia");
       if (!mapped.analysis.summary) {
         warnings.push("A IA não retornou parecer textual; a análise será gerada automaticamente pelos valores.");
@@ -431,10 +445,7 @@ export async function extractQuotation({
       return {
         draft: mapped,
         mode: "ia",
-        provider:
-          config.provider === "openai"
-            ? `OpenAI · ${config.model}`
-            : `Google Gemini · ${config.model}`,
+        provider: config.provider === "openai" ? `OpenAI · ${usedModel}` : `Google Gemini · ${usedModel}`,
         warnings,
         fileSummaries,
       };
