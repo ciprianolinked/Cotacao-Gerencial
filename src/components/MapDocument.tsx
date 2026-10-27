@@ -5,8 +5,10 @@ import {
   formatDateBR,
   itemTotal,
   lowestPriceForItem,
+  recordedSavings,
+  supplierCostBreakdown,
 } from "@/lib/quotation";
-import { NATURE_LABEL, NATURE_SHORT } from "@/lib/constants";
+import { COST_TYPE_LABEL } from "@/lib/constants";
 import { BrandLogo } from "./BrandLogo";
 
 type MapDocumentProps = {
@@ -102,7 +104,6 @@ export function MapDocument({ draft, protocol, generatedAt }: MapDocumentProps) 
                 <th>Descrição do item / escopo</th>
                 <th className="w-[42px] text-center">Qtd</th>
                 <th className="w-[46px]">Un.</th>
-              <th className="w-[44px]">Nat.</th>
                 {suppliers.map((supplier) => (
                   <th key={supplier.id} className="num w-[92px]">
                     {supplier.name.trim() || "Fornecedor"}
@@ -116,10 +117,9 @@ export function MapDocument({ draft, protocol, generatedAt }: MapDocumentProps) 
                 return (
                   <tr key={item.id}>
                     <td className="text-slate-500">{String(index + 1).padStart(2, "0")}</td>
-                    <td className="font-medium">{item.description || "Item sem descrição"}</td>
+                    <td className="font-medium">{item.description || "Item sem descrição"}<div className="text-[8px] font-semibold text-slate-500">{COST_TYPE_LABEL[item.costType ?? "nao_discriminado"]}</div></td>
                     <td className="num text-center">{item.quantity || "—"}</td>
                     <td className="text-slate-600">{item.unit}</td>
-                  <td className="text-slate-600">{NATURE_SHORT[item.nature]}</td>
                     {suppliers.map((supplier) => {
                       const value = item.prices?.[supplier.id] ?? null;
                       const isBest = value !== null && lowest !== null && Math.abs(value - lowest) < 0.005;
@@ -132,22 +132,8 @@ export function MapDocument({ draft, protocol, generatedAt }: MapDocumentProps) 
                   </tr>
                 );
               })}
-              {(["material", "mao_de_obra"] as const)
-                .filter((nature) => suppliers.some((supplier) => natureTotal(rows, supplier.id, nature) > 0))
-                .map((nature) => (
-                  <tr key={nature}>
-                    <td colSpan={5} className="!bg-[#f6f5ef] text-right text-[9px] font-bold uppercase tracking-[0.1em] text-slate-600">
-                      Subtotal · {NATURE_LABEL[nature]}
-                    </td>
-                    {suppliers.map((supplier) => (
-                      <td key={supplier.id} className="num !bg-[#f6f5ef] text-[10px] font-bold text-ink">
-                        {formatCurrency(natureTotal(rows, supplier.id, nature) || null)}
-                      </td>
-                    ))}
-                  </tr>
-                ))}
               <tr>
-                <td colSpan={5} className="!bg-ink !text-white text-right text-[9px] font-bold uppercase tracking-[0.12em]">
+                <td colSpan={4} className="!bg-ink !text-white text-right text-[9px] font-bold uppercase tracking-[0.12em]">
                   Total geral da proposta
                 </td>
                 {suppliers.map((supplier) => {
@@ -163,8 +149,15 @@ export function MapDocument({ draft, protocol, generatedAt }: MapDocumentProps) 
                   );
                 })}
               </tr>
+              {(["mao_obra", "material", "nao_discriminado"] as const).map((type) => (
+                <tr key={type}>
+                  <td colSpan={4} className="text-right text-[9px] font-bold text-slate-600">{COST_TYPE_LABEL[type]}</td>
+                  {suppliers.map((supplier) => <td key={supplier.id} className="num text-slate-600">{formatCurrency(supplierCostBreakdown(rows, supplier.id)[type].total)}</td>)}
+                </tr>
+              ))}
             </tbody>
           </table>
+          <p className="mt-1 text-[8.5px] text-slate-500">Valores globais sem separação são apresentados como não discriminados; não se presume a divisão entre mão de obra e material.</p>
           {!hasPrices && (
             <p className="mt-2 rounded-md bg-amber-50 px-2.5 py-1.5 text-[9px] font-semibold text-amber-700">
               Aguardando o preenchimento dos valores unitários por fornecedor para conclusão do comparativo.
@@ -198,9 +191,9 @@ export function MapDocument({ draft, protocol, generatedAt }: MapDocumentProps) 
                   <tr key={supplier.id}>
                     <td>
                       <span className="font-bold text-ink">{supplier.name.trim() || "Fornecedor"}</span>
-                      {ranking?.isBest && (
+                      {ranking?.isBest && metrics.isComparable && (
                         <span className="ml-1.5 rounded-sm bg-success-soft px-1.5 py-[1px] text-[7.5px] font-extrabold uppercase tracking-[0.08em] text-success">
-                          Recomendado
+                          Menor valor
                         </span>
                       )}
                       {supplier.notes && <div className="text-[8.5px] text-slate-500">{supplier.notes}</div>}
@@ -251,7 +244,7 @@ export function MapDocument({ draft, protocol, generatedAt }: MapDocumentProps) 
                 {formatCurrency(metrics.best?.total ?? null)}
               </p>
               <div className="mt-2 border-t border-line pt-2">
-                <p className="label !text-[8px]">Economia apurada</p>
+                <p className="label !text-[8px]">Economia potencial</p>
                 <p className="text-[13px] font-extrabold leading-none text-ink">{formatCurrency(metrics.savings)}</p>
                 {metrics.savings > 0 && (
                   <p className="mt-0.5 text-[8.5px] font-semibold text-slate-500">
@@ -266,6 +259,13 @@ export function MapDocument({ draft, protocol, generatedAt }: MapDocumentProps) 
             </div>
           </div>
         </section>
+
+        {recordedSavings(draft) !== null && draft.analysis.outcome && (
+          <section className="mt-3 rounded-md border border-line bg-[#faf8f1] px-3 py-2">
+            <p className="label !text-[8px]">Resultado confirmado da contratação</p>
+            <p className="mt-1 text-[10px] text-ink">Fornecedor: <strong>{draft.suppliers.find((supplier) => supplier.id === draft.analysis.outcome?.supplierId)?.name || "—"}</strong> · Referência: <strong>{formatCurrency(draft.analysis.outcome.referenceAmount)}</strong> · Contratado: <strong>{formatCurrency(draft.analysis.outcome.contractedAmount)}</strong> · Diferença: <strong>{formatCurrency(recordedSavings(draft))}</strong></p>
+          </section>
+        )}
 
         <section>
           <div className="doc-section-title">
@@ -306,21 +306,6 @@ export function MapDocument({ draft, protocol, generatedAt }: MapDocumentProps) 
       </div>
     </article>
   );
-}
-
-/** Soma de uma natureza (material ou mão de obra) para um fornecedor. */
-function natureTotal(
-  items: QuotationDraft["items"],
-  supplierId: string,
-  nature: QuotationDraft["items"][number]["nature"],
-): number {
-  let total = 0;
-  for (const item of items) {
-    if (item.nature !== nature) continue;
-    const value = itemTotal(item, supplierId);
-    if (value !== null) total += value;
-  }
-  return Math.round(total * 100) / 100;
 }
 
 function itemTotalSummary(items: QuotationDraft["items"], supplierId: string): number | null {

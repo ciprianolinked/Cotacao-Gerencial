@@ -1,5 +1,5 @@
 import type {
-  ItemNature,
+  CostType,
   QuotationAnalysis,
   QuotationDraft,
   QuotationKind,
@@ -7,46 +7,7 @@ import type {
   QuoteItem,
   Supplier,
 } from "./types";
-import { CATEGORIES, MAX_SUPPLIERS, NATURE_VALUES } from "./constants";
-
-/** Ações que caracterizam mão de obra, mesmo quando citam um material ("instalação de bomba"). */
-const LABOR_ACTIONS =
-  /(m[ãa]o\s*de\s*obra|instala[çc][ãa]o|instalar|execu[çc][ãa]o|executar|aplica[çc][ãa]o|montagem|montar|manuten[çc][ãa]o|limpeza|pintura|reparo|reparar|conserto|troca\s+de|substitui[çc][ãa]o|revis[ãa]o|hora\s*t[ée]cnica|visita\s*t[ée]cnica|m[ãa]o\s*obra|di[áa]ria|empreitada|vistoria|laudo|projeto|assist[êe]ncia|servi[çc]o)/i;
-
-/** Itens fornecidos (peças, insumos e equipamentos). */
-const MATERIAL_HINTS =
-  /(material|materiais|tubo|cano|cabo|fio|disjuntor|registro|tinta|cimento|areia|pe[çc]a|pe[çc]as|bomba|motor|filtro|l[âa]mpada|lumin[áa]ria|conex[ãa]o|parafuso|v[áa]lvula|torneira|rolo|saco|kit|equipamento|insumo|produto)/i;
-
-/** Unidades típicas de mão de obra. */
-const LABOR_UNITS = /^(hora|h|m[êe]s|di[áa]ria|servi[çc]o|vb.*)$/i;
-
-/**
- * Classifica um item entre material e mão de obra.
- * A ação tem prioridade: "instalação de bomba" é mão de obra, "bomba" é material.
- */
-export function inferNature(description: string, unit = ""): ItemNature {
-  const text = `${description} ${unit}`.trim();
-  if (!text) return "outros";
-
-  const hasLabor = LABOR_ACTIONS.test(text);
-  const mentionsMaterialWord = /(material|materiais)/i.test(description);
-  // "Material e mão de obra inclusos" não dá para separar.
-  if (hasLabor && mentionsMaterialWord) return "outros";
-  if (hasLabor) return "mao_de_obra";
-  if (MATERIAL_HINTS.test(text)) return "material";
-  if (LABOR_UNITS.test(unit.trim())) return "mao_de_obra";
-  return "outros";
-}
-
-export function normalizeNature(value: unknown, description = "", unit = ""): ItemNature {
-  const raw = typeof value === "string" ? value.trim().toLowerCase().replace(/[\s-]+/g, "_") : "";
-  if (raw === "mao_de_obra" || raw === "mão_de_obra" || raw === "labor" || raw === "servico" || raw === "serviço") {
-    return "mao_de_obra";
-  }
-  if (raw === "material" || raw === "materials" || raw === "produto" || raw === "produtos") return "material";
-  if (raw === "outros" || raw === "outro" || raw === "other") return "outros";
-  return inferNature(description, unit);
-}
+import { CATEGORIES, MAX_SUPPLIERS } from "./constants";
 
 export function uid(prefix = ""): string {
   const random = Math.random().toString(36).slice(2, 9);
@@ -85,6 +46,8 @@ export function parseCurrencyInput(raw: string): number | null {
   let normalized = clean;
   if (clean.includes(",")) {
     normalized = clean.replace(/\./g, "").replace(",", ".");
+  } else if (/^-?\d{1,3}(?:\.\d{3})+$/.test(clean)) {
+    normalized = clean.replace(/\./g, "");
   }
   const parsed = Number(normalized);
   return Number.isFinite(parsed) ? parsed : null;
@@ -137,17 +100,34 @@ export function round2(value: number): number {
   return Math.round((value + Number.EPSILON) * 100) / 100;
 }
 
-export type NatureTotals = { material: number; mao_de_obra: number; outros: number };
+export type CostBreakdown = Record<CostType, { total: number | null; pricedItems: number }>;
 
-/** Soma os valores de um fornecedor separando material, mão de obra e outros. */
-export function supplierTotalsByNature(items: QuoteItem[], supplierId: string): NatureTotals {
-  const totals: NatureTotals = { material: 0, mao_de_obra: 0, outros: 0 };
+/** Soma somente os valores efetivamente informados, sem inferir partes de um preço global. */
+export function supplierCostBreakdown(items: QuoteItem[], supplierId: string): CostBreakdown {
+  const result: CostBreakdown = {
+    mao_obra: { total: null, pricedItems: 0 },
+    material: { total: null, pricedItems: 0 },
+    nao_discriminado: { total: null, pricedItems: 0 },
+  };
   for (const item of items) {
     const value = itemTotal(item, supplierId);
     if (value === null) continue;
-    totals[item.nature ?? "outros"] = round2((totals[item.nature ?? "outros"] ?? 0) + value);
+    const type: CostType = item.costType === "mao_obra" || item.costType === "material" ? item.costType : "nao_discriminado";
+    result[type].total = round2((result[type].total ?? 0) + value);
+    result[type].pricedItems += 1;
   }
-  return totals;
+  return result;
+}
+
+/** Só apura economia efetiva quando a equipe confirma os valores de contratação. */
+export function recordedSavings(draft: Pick<QuotationDraft, "status" | "suppliers" | "analysis">): number | null {
+  const outcome = draft.analysis.outcome;
+  if (draft.status !== "concluido" || !outcome?.confirmed || !outcome.supplierId ||
+      !draft.suppliers.some((supplier) => supplier.id === outcome.supplierId) ||
+      outcome.referenceAmount === null || outcome.contractedAmount === null ||
+      !Number.isFinite(outcome.referenceAmount) || !Number.isFinite(outcome.contractedAmount) ||
+      outcome.referenceAmount < 0 || outcome.contractedAmount < 0) return null;
+  return round2(outcome.referenceAmount - outcome.contractedAmount);
 }
 
 export type SupplierRanking = {
@@ -155,16 +135,16 @@ export type SupplierRanking = {
   total: number | null;
   coverage: number;
   isBest: boolean;
-  byNature: NatureTotals;
 };
 
 export function rankSuppliers(items: QuoteItem[], suppliers: Supplier[]): SupplierRanking[] {
   const rows = suppliers.map((supplier) => {
     const total = supplierTotal(items, supplier.id);
     const coverage = items.filter((item) => itemTotal(item, supplier.id) !== null).length;
-    return { supplier, total, coverage, isBest: false, byNature: supplierTotalsByNature(items, supplier.id) };
+    return { supplier, total, coverage, isBest: false };
   });
-  const comparable = rows.filter((row) => row.total !== null);
+  // Uma proposta parcial não pode ser comparada como se tivesse cotado todo o escopo.
+  const comparable = rows.filter((row) => items.length > 0 && row.total !== null && row.coverage === items.length);
   if (comparable.length > 0) {
     const best = comparable.reduce((acc, row) => ((row.total as number) < (acc.total as number) ? row : acc));
     best.isBest = true;
@@ -181,15 +161,11 @@ export type QuotationMetrics = {
   itemCount: number;
   supplierCount: number;
   isComparable: boolean;
-  /** Composição da melhor proposta entre material e mão de obra. */
-  bestByNature: NatureTotals;
-  /** Economia separada por natureza (melhor x mais cara, item a item). */
-  savingsByNature: NatureTotals;
 };
 
 export function computeMetrics(draft: Pick<QuotationDraft, "items" | "suppliers">): QuotationMetrics {
   const rankings = rankSuppliers(draft.items, draft.suppliers);
-  const priced = rankings.filter((row) => row.total !== null);
+  const priced = rankings.filter((row) => draft.items.length > 0 && row.total !== null && row.coverage === draft.items.length);
   const best = priced.find((row) => row.isBest) ?? null;
   const highest =
     priced.length > 1
@@ -198,18 +174,6 @@ export function computeMetrics(draft: Pick<QuotationDraft, "items" | "suppliers"
   const savings = best && highest ? round2((highest.total as number) - (best.total as number)) : 0;
   const savingsPercent =
     best && highest && (highest.total as number) > 0 ? (savings / (highest.total as number)) * 100 : 0;
-
-  // Economia por natureza: compara, em cada item, o maior e o menor valor cotado.
-  const savingsByNature: NatureTotals = { material: 0, mao_de_obra: 0, outros: 0 };
-  for (const item of draft.items) {
-    const values = draft.suppliers
-      .map((supplier) => itemTotal(item, supplier.id))
-      .filter((value): value is number => value !== null);
-    if (values.length < 2) continue;
-    const nature = item.nature ?? "outros";
-    savingsByNature[nature] = round2(savingsByNature[nature] + (Math.max(...values) - Math.min(...values)));
-  }
-
   return {
     rankings,
     best,
@@ -219,8 +183,6 @@ export function computeMetrics(draft: Pick<QuotationDraft, "items" | "suppliers"
     itemCount: draft.items.length,
     supplierCount: draft.suppliers.filter((supplier) => supplier.name.trim()).length,
     isComparable: priced.length > 1,
-    bestByNature: best?.byNature ?? { material: 0, mao_de_obra: 0, outros: 0 },
-    savingsByNature,
   };
 }
 
@@ -239,9 +201,9 @@ export function buildNarrative(draft: Pick<QuotationDraft, "items" | "suppliers"
   if (!best) {
     return {
       summary:
-        "Mapa em elaboração. Insira as propostas dos fornecedores para gerar automaticamente o comparativo de preços.",
+        "Ainda não há proposta com preços para todos os itens do escopo. Os totais parciais não são comparáveis como propostas completas.",
       recommendation:
-        "Preencha os valores unitários de cada fornecedor e clique em “Gerar análise” para receber a recomendação técnica com o comparativo de economia.",
+        "Preencha os valores unitários de cada item e confira o escopo de cada fornecedor antes de gerar uma recomendação.",
       notes: "",
     };
   }
@@ -249,23 +211,19 @@ export function buildNarrative(draft: Pick<QuotationDraft, "items" | "suppliers"
   const bestName = best.supplier.name || "Fornecedor";
   const covered = best.coverage;
   const totalItems = metrics.itemCount;
-
-  const { material, mao_de_obra: labor } = metrics.bestByNature;
-  const composition =
-    material > 0 && labor > 0
-      ? `A composição da proposta recomendada é de ${formatCurrency(material)} em material e ${formatCurrency(labor)} em mão de obra (${Math.round((material / (material + labor)) * 100)}% material e ${Math.round((labor / (material + labor)) * 100)}% mão de obra).`
-      : material > 0
-        ? `A proposta recomendada é composta integralmente por material (${formatCurrency(material)}).`
-        : labor > 0
-          ? `A proposta recomendada é composta integralmente por mão de obra (${formatCurrency(labor)}).`
-          : "";
+  const breakdown = supplierCostBreakdown(draft.items, best.supplier.id);
+  const breakdownText = [
+    breakdown.mao_obra.total !== null ? `mão de obra ${formatCurrency(breakdown.mao_obra.total)}` : "",
+    breakdown.material.total !== null ? `material ${formatCurrency(breakdown.material.total)}` : "",
+    breakdown.nao_discriminado.total !== null ? `não discriminado ${formatCurrency(breakdown.nao_discriminado.total)}` : "",
+  ].filter(Boolean).join("; ");
 
   const summary = [
     `Foram analisadas ${metrics.supplierCount} proposta(s) para ${draft.kind === "produtos" ? "o fornecimento dos produtos" : "a prestação dos serviços"}${draft.service ? ` de ${draft.service.toLowerCase()}` : ""}, totalizando ${totalItems} item(ns) no escopo.`,
     metrics.isComparable
       ? `A proposta de ${bestName} apresenta o menor valor global (${formatCurrency(best.total)}), com cobertura de ${covered} de ${totalItems} item(ns) cotados.`
-      : `A proposta de ${bestName} é a única com valores informados até o momento (${formatCurrency(best.total)}).`,
-    composition,
+      : `A proposta de ${bestName} é a única com preços para todos os itens até o momento (${formatCurrency(best.total)}). Não há comparação suficiente para calcular a economia.`,
+    breakdownText ? `Na proposta de ${bestName}, os itens informados somam: ${breakdownText}. Valores não discriminados não foram divididos entre mão de obra e material.` : "",
     metrics.savings > 0
       ? `A diferença em relação à proposta mais elevada é de ${formatCurrency(metrics.savings)} (${metrics.savingsPercent.toFixed(1)}%), valor que representa a economia potencial na contratação.`
       : "",
@@ -273,9 +231,9 @@ export function buildNarrative(draft: Pick<QuotationDraft, "items" | "suppliers"
     .filter(Boolean)
     .join(" ");
 
-  const recommendation = best
-    ? `Recomendamos a contratação de ${bestName}, condicionada à confirmação do escopo descrito, ao cumprimento integral das condições comerciais registradas e à apresentação da documentação fiscal e trabalhista exigida pela convenção do condomínio.`
-    : "Aguardando definição do fornecedor recomendado.";
+  const recommendation = metrics.isComparable
+    ? `Recomendamos avaliar a proposta de ${bestName}, condicionada à confirmação do escopo, das condições comerciais e da documentação exigida. A decisão deve ser validada pelo condomínio.`
+    : "Antes de recomendar uma contratação, obtenha ao menos duas propostas completas e confirme que os fornecedores cotaram o mesmo escopo.";
 
   return { summary, recommendation, notes: draft.condominium ? `Mapa elaborado para ${draft.condominium}.` : "" };
 }
@@ -295,14 +253,7 @@ export function createSupplier(index: number): Supplier {
 export function createItem(description = "", supplierIds: string[] = []): QuoteItem {
   const prices: Record<string, number | null> = {};
   for (const id of supplierIds) prices[id] = null;
-  return {
-    id: uid("itm_"),
-    description,
-    unit: "un",
-    quantity: 1,
-    nature: description ? inferNature(description, "un") : "material",
-    prices,
-  };
+  return { id: uid("itm_"), description, unit: "un", quantity: 1, prices, costType: "nao_discriminado" };
 }
 
 export function createEmptyDraft(overrides: Partial<QuotationDraft> = {}): QuotationDraft {
@@ -374,19 +325,21 @@ export function normalizeDraft(input: unknown): QuotationDraft {
     for (const supplier of safeSuppliers) {
       prices[supplier.id] = nullableNumber(rawPrices[supplier.id]);
     }
-    const description = asString(item.description).slice(0, 600);
-    const unit = asString(item.unit, "un").slice(0, 24);
     return {
       id: asString(item.id) || uid("itm_"),
-      description,
-      unit,
+      description: asString(item.description).slice(0, 600),
+      unit: asString(item.unit, "un").slice(0, 24),
       quantity: Math.max(0, asNumber(item.quantity, 1)),
-      nature: normalizeNature(item.nature, description, unit),
       prices,
+      costType: item.costType === "mao_obra" || item.costType === "material" ? item.costType : "nao_discriminado",
     };
   });
 
   const analysisInput = (source.analysis ?? {}) as Record<string, unknown>;
+  const outcomeInput = (analysisInput.outcome ?? {}) as Record<string, unknown>;
+  const referenceAmount = nullableNumber(outcomeInput.referenceAmount);
+  const contractedAmount = nullableNumber(outcomeInput.contractedAmount);
+  const outcomeSupplierId = asString(outcomeInput.supplierId).slice(0, 100);
   const rawStatus = asString(source.status);
   const rawKind = asString(source.kind);
   const rawDate = asString(source.analysisDate);
@@ -409,6 +362,12 @@ export function normalizeDraft(input: unknown): QuotationDraft {
       summary: asString(analysisInput.summary).slice(0, 4000),
       recommendation: asString(analysisInput.recommendation).slice(0, 2000),
       notes: asString(analysisInput.notes).slice(0, 2000),
+      outcome: {
+        supplierId: safeSuppliers.some((supplier) => supplier.id === outcomeSupplierId) ? outcomeSupplierId : "",
+        referenceAmount: referenceAmount !== null && referenceAmount >= 0 ? referenceAmount : null,
+        contractedAmount: contractedAmount !== null && contractedAmount >= 0 ? contractedAmount : null,
+        confirmed: outcomeInput.confirmed === true,
+      },
     },
     attachments: attachments.slice(0, 12).map((entry, index) => {
       const file = (entry ?? {}) as Record<string, unknown>;

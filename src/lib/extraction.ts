@@ -38,11 +38,11 @@ export function mergeExtraction(
 
   return {
     ...base,
-    condominium: extracted.condominium?.trim() || base.condominium,
-    analysisDate: extracted.analysisDate || base.analysisDate,
-    recipient: extracted.recipient?.trim() || base.recipient,
-    service: extracted.service?.trim() || base.service,
-    description: extracted.description?.trim() || base.description,
+    condominium: base.condominium.trim() || extracted.condominium?.trim() || "",
+    analysisDate: base.analysisDate || extracted.analysisDate || "",
+    recipient: base.recipient.trim() || extracted.recipient?.trim() || "",
+    service: base.service.trim() || extracted.service?.trim() || "",
+    description: base.description.trim() || extracted.description?.trim() || "",
     kind: extracted.kind ?? base.kind,
     category: extracted.category || base.category,
     suppliers,

@@ -252,6 +252,17 @@ body {
     background: #fff !important;
   }
 
+  .dashboard-print {
+    max-width: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+
+  .dashboard-print .card {
+    box-shadow: none !important;
+    break-inside: avoid;
+  }
+
   * {
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;

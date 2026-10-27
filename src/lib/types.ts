@@ -1,5 +1,6 @@
 export type QuotationStatus = "rascunho" | "em_analise" | "concluido";
 export type QuotationKind = "servico" | "produtos";
+export type CostType = "mao_obra" | "material" | "nao_discriminado";
 
 export type Supplier = {
   id: string;
@@ -11,22 +12,29 @@ export type Supplier = {
   notes: string;
 };
 
-/** Natureza do item: separa o que é material do que é mão de obra. */
-export type ItemNature = "material" | "mao_de_obra" | "outros";
-
 export type QuoteItem = {
   id: string;
   description: string;
   unit: string;
   quantity: number;
-  nature: ItemNature;
   prices: Record<string, number | null>;
+  // Registros anteriores continuam válidos; itens antigos são considerados não discriminados.
+  costType?: CostType;
+};
+
+/** Valores informados e confirmados pela equipe após uma contratação. */
+export type QuotationOutcome = {
+  supplierId: string;
+  referenceAmount: number | null;
+  contractedAmount: number | null;
+  confirmed: boolean;
 };
 
 export type QuotationAnalysis = {
   summary: string;
   recommendation: string;
   notes: string;
+  outcome?: QuotationOutcome;
 };
 
 export type AttachmentMeta = {
@@ -76,4 +84,5 @@ export type CondominiumRecord = {
   name: string;
   city: string | null;
   manager: string | null;
+  contactEmail?: string | null;
 };

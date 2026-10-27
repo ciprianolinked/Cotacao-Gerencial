@@ -29,7 +29,7 @@ function toRecord(row: typeof quotations.$inferSelect): QuotationRecord {
 }
 
 export async function listQuotations(): Promise<QuotationRecord[]> {
-  const rows = await db.select().from(quotations).orderBy(desc(quotations.updatedAt)).limit(100);
+  const rows = await db.select().from(quotations).orderBy(desc(quotations.updatedAt));
   return rows.map(toRecord);
 }
 
@@ -107,71 +107,7 @@ export async function deleteQuotation(id: string): Promise<boolean> {
 
 export async function listCondominiums(): Promise<CondominiumRecord[]> {
   const rows = await db.select().from(condominiums).orderBy(condominiums.name);
-  return rows.map((row) => ({ id: row.id, name: row.name, city: row.city, manager: row.manager }));
-}
-
-export async function getCondominium(id: string): Promise<CondominiumRecord | null> {
-  if (!isUuid(id)) return null;
-  const rows = await db.select().from(condominiums).where(eq(condominiums.id, id)).limit(1);
-  const row = rows[0];
-  return row ? { id: row.id, name: row.name, city: row.city, manager: row.manager } : null;
-}
-
-type CondominiumInput = { name?: unknown; city?: unknown; manager?: unknown };
-
-function cleanCondominium(input: CondominiumInput) {
-  const text = (value: unknown, max: number) =>
-    typeof value === "string" ? value.trim().slice(0, max) : "";
-  const name = text(input.name, 200);
-  if (name.length < 3) {
-    throw new Error("Informe o nome do condomínio com pelo menos 3 letras.");
-  }
-  return { name, city: text(input.city, 120) || null, manager: text(input.manager, 160) || null };
-}
-
-export async function createCondominium(input: CondominiumInput): Promise<CondominiumRecord> {
-  const values = cleanCondominium(input);
-  const existing = await db.select().from(condominiums).where(eq(condominiums.name, values.name)).limit(1);
-  if (existing.length > 0) {
-    throw new Error("Já existe um condomínio cadastrado com esse nome.");
-  }
-  const [row] = await db.insert(condominiums).values(values).returning();
-  return { id: row.id, name: row.name, city: row.city, manager: row.manager };
-}
-
-export async function updateCondominium(id: string, input: CondominiumInput): Promise<CondominiumRecord | null> {
-  if (!isUuid(id)) return null;
-  const current = await getCondominium(id);
-  if (!current) return null;
-  const values = cleanCondominium(input);
-
-  const duplicated = await db.select().from(condominiums).where(eq(condominiums.name, values.name)).limit(1);
-  if (duplicated.length > 0 && duplicated[0].id !== id) {
-    throw new Error("Já existe outro condomínio com esse nome.");
-  }
-
-  const [row] = await db.update(condominiums).set(values).where(eq(condominiums.id, id)).returning();
-  // Mantém os mapas já salvos apontando para o nome novo.
-  if (current.name !== values.name) {
-    await db
-      .update(quotations)
-      .set({ condominium: values.name })
-      .where(eq(quotations.condominium, current.name));
-  }
-  return { id: row.id, name: row.name, city: row.city, manager: row.manager };
-}
-
-/** Remove o cadastro. Os mapas já emitidos continuam guardados com o nome atual. */
-export async function deleteCondominium(id: string): Promise<{ ok: boolean; quotationCount: number }> {
-  if (!isUuid(id)) return { ok: false, quotationCount: 0 };
-  const current = await getCondominium(id);
-  if (!current) return { ok: false, quotationCount: 0 };
-  const used = await db
-    .select({ count: sql<number>`count(*)::int` })
-    .from(quotations)
-    .where(eq(quotations.condominium, current.name));
-  await db.delete(condominiums).where(eq(condominiums.id, id));
-  return { ok: true, quotationCount: used[0]?.count ?? 0 };
+  return rows.map((row) => ({ id: row.id, name: row.name, city: row.city, manager: row.manager, contactEmail: row.contactEmail }));
 }
 
 export async function rememberCondominium(name: string): Promise<void> {

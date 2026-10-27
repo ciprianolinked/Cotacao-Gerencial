@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import type { AiExtractionResult } from "@/lib/types";
+import type { AiAnalysisPhase } from "@/lib/ai-stream";
+import { readAiAnalysisResponse } from "@/lib/ai-response";
 import { formatBytes } from "@/lib/quotation";
 import { MAX_FILES } from "@/lib/constants";
 import { CheckIcon, CloseIcon, FileIcon, SparklesIcon, UploadIcon } from "./icons";
@@ -27,39 +29,11 @@ type AiImportPanelProps = {
   ctaLabel?: string;
 };
 
-/** Lê a resposta mesmo quando o servidor devolve uma página de erro em texto, e não JSON. */
-function parseServerResponse(status: number, body: string): AiExtractionResult {
-  let data: (AiExtractionResult & { error?: string }) | null = null;
-  try {
-    data = JSON.parse(body) as AiExtractionResult & { error?: string };
-  } catch {
-    data = null;
-  }
-  if (status >= 200 && status < 300 && data && !data.error) return data;
-  if (data?.error) throw new Error(data.error);
-  if (status === 413 || /PAYLOAD_TOO_LARGE|too large/i.test(body)) {
-    throw new Error(
-      "Os arquivos ultrapassaram o limite de envio do servidor (cerca de 4 MB no total na Vercel). Comprima os PDFs ou envie menos arquivos por vez.",
-    );
-  }
-  if (status === 504 || /TIMEOUT/i.test(body)) {
-    throw new Error(
-      "A IA demorou mais que o tempo permitido pelo servidor. Tente enviar menos PDFs por vez (por exemplo, 1 ou 2) ou arquivos menores.",
-    );
-  }
-  if (status === 0) throw new Error("Não houve resposta do servidor. Verifique a conexão e tente novamente.");
-  throw new Error(
-    `O servidor retornou um erro inesperado (código ${status}). Tente novamente com menos arquivos; se persistir, consulte os registros (Logs) da Vercel.`,
-  );
+function formatElapsed(seconds: number): string {
+  const minutes = Math.floor(seconds / 60);
+  const remaining = String(seconds % 60).padStart(2, "0");
+  return `${minutes}:${remaining}`;
 }
-
-const STAGES = [
-  "Lendo os documentos enviados…",
-  "Identificando fornecedores e propostas…",
-  "Extraindo itens, quantidades e valores…",
-  "Comparando preços e cobertura…",
-  "Redigindo o parecer técnico…",
-];
 
 export function AiImportPanel({
   hints,
@@ -73,17 +47,22 @@ export function AiImportPanel({
   const [showText, setShowText] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [stage, setStage] = useState(0);
+  const [phase, setPhase] = useState<"enviando" | AiAnalysisPhase>("enviando");
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<AiExtractionResult | null>(null);
   const [applied, setApplied] = useState(false);
   const [status, setStatus] = useState<AiStatus | null>(null);
-  const [progress, setProgress] = useState(0);
-  const [estimate, setEstimate] = useState(0);
-  const [elapsed, setElapsed] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
-  const xhrRef = useRef<XMLHttpRequest | null>(null);
-  const cancelledRef = useRef(false);
+  const requestRef = useRef<AbortController | null>(null);
+
+  const totalFilesBytes = files.reduce((sum, file) => sum + file.size, 0);
+  const uploadLimit = status ? status.maxTotalUploadBytes : 4 * 1024 * 1024;
+  // O Gemini não informa porcentagem real: a barra indica apenas uma estimativa.
+  // Nunca chega a 100% antes da resposta verdadeira da IA.
+  const progress = phase === "enviando"
+    ? Math.min(12, 3 + elapsedSeconds)
+    : Math.min(95, 15 + Math.floor(80 * (1 - Math.exp(-elapsedSeconds / 65))));
 
   useEffect(() => {
     let active = true;
@@ -100,11 +79,15 @@ export function AiImportPanel({
 
   useEffect(() => {
     if (!loading) return;
-    const timer = setInterval(() => setStage((current) => (current + 1) % STAGES.length), 2400);
+    const startTime = Date.now();
+    const timer = setInterval(() => setElapsedSeconds(Math.floor((Date.now() - startTime) / 1000)), 1000);
     return () => clearInterval(timer);
   }, [loading]);
 
+  useEffect(() => () => requestRef.current?.abort(), []);
+
   function addFiles(incoming: FileList | File[]) {
+    if (loading) return;
     const next = Array.from(incoming).filter((file) => {
       const okType = file.type === "application/pdf" || file.type.startsWith("image/");
       return okType && file.size <= 15 * 1024 * 1024;
@@ -130,29 +113,21 @@ export function AiImportPanel({
       setError("Envie os arquivos das propostas ou cole o texto da cotação para analisar.");
       return;
     }
-    if (status?.maxTotalUploadBytes) {
-      const textBytes = new TextEncoder().encode(text + JSON.stringify(hints)).byteLength;
-      const total = files.reduce((sum, file) => sum + file.size, 0) + textBytes + 16 * 1024;
-      if (total > status.maxTotalUploadBytes) {
-        setError("Na Vercel, o limite é de aproximadamente 4 MB por envio, somando todos os arquivos e o texto. Reduza ou divida os documentos e tente novamente.");
-        return;
-      }
+
+    const textBytes = new TextEncoder().encode(text + JSON.stringify(hints)).byteLength;
+    const approxPayloadBytes = totalFilesBytes + textBytes + 16 * 1024;
+    if (uploadLimit && approxPayloadBytes > uploadLimit) {
+      setError(`O total dos arquivos (${formatBytes(totalFilesBytes)}) ultrapassa o limite seguro de 4 MB por envio na Vercel. Comprima os PDFs para enviá-los juntos.`);
+      return;
     }
+
+    const controller = new AbortController();
+    requestRef.current = controller;
     setLoading(true);
+    setPhase("enviando");
+    setElapsedSeconds(0);
     setError(null);
     setResult(null);
-    setStage(0);
-    setProgress(0);
-    setElapsed(0);
-    cancelledRef.current = false;
-
-    // Estimativa do tempo de processamento da IA (segundos), baseada no volume enviado.
-    const totalMb = files.reduce((sum, file) => sum + file.size, 0) / (1024 * 1024);
-    const estimatedSeconds = Math.round(15 + files.length * 8 + totalMb * 10 + text.length / 4000);
-    setEstimate(estimatedSeconds);
-    const startedAt = Date.now();
-    let processingStart = 0;
-    let ticker: ReturnType<typeof setInterval> | null = null;
 
     try {
       const form = new FormData();
@@ -160,58 +135,26 @@ export function AiImportPanel({
       form.append("text", text);
       form.append("hints", JSON.stringify(hints));
 
-      const { status, body } = await new Promise<{ status: number; body: string }>((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-        xhrRef.current = xhr;
-        xhr.open("POST", "/api/ai/extract");
-        xhr.timeout = 320_000;
-        // Envio dos arquivos: 0% a 20%.
-        xhr.upload.onprogress = (event) => {
-          if (event.lengthComputable) setProgress(Math.min(20, Math.round((event.loaded / event.total) * 20)));
-        };
-        xhr.upload.onload = () => {
-          processingStart = Date.now();
-          setProgress(20);
-          // Processamento da IA: 20% a 97%, seguindo a estimativa e desacelerando no fim.
-          ticker = setInterval(() => {
-            const elapsed = (Date.now() - processingStart) / 1000;
-            const ratio = 1 - Math.exp(-elapsed / (estimatedSeconds * 0.6));
-            setProgress(Math.min(97, Math.round(20 + ratio * 77)));
-            setElapsed(Math.round((Date.now() - startedAt) / 1000));
-          }, 500);
-        };
-        xhr.onload = () => resolve({ status: xhr.status, body: xhr.responseText });
-        xhr.onabort = () => reject(new Error("__CANCELLED__"));
-        xhr.onerror = () => {
-          if (cancelledRef.current) reject(new Error("__CANCELLED__"));
-          else reject(new Error("Falha de conexão durante o envio. Verifique a internet e tente novamente."));
-        };
-        xhr.ontimeout = () => reject(new Error("A análise demorou demais. Envie menos arquivos por vez ou PDFs menores."));
-        xhr.send(form);
+      const response = await fetch("/api/ai/extract?stream=1", {
+        method: "POST",
+        body: form,
+        signal: controller.signal,
       });
-
-      const data = parseServerResponse(status, body);
-      setProgress(100);
+      const data = await readAiAnalysisResponse(response, setPhase);
       setResult(data);
       setApplied(false);
     } catch (requestError) {
-      const message = requestError instanceof Error ? requestError.message : "Erro inesperado na análise.";
-      if (message === "__CANCELLED__") {
-        setError("Análise cancelada. Dica: teste com 1 PDF para descobrir se o problema é um arquivo específico.");
-        setProgress(0);
+      if (controller.signal.aborted) {
+        setError("Análise cancelada. Os arquivos continuam selecionados e você pode tentar novamente.");
+      } else if (requestError instanceof TypeError) {
+        setError("A conexão foi interrompida durante a análise. Seus arquivos continuam selecionados; verifique a internet e tente novamente.");
       } else {
-        setError(message);
+        setError(requestError instanceof Error ? requestError.message : "Não foi possível concluir a análise. Tente novamente.");
       }
     } finally {
-      if (ticker) clearInterval(ticker);
-      xhrRef.current = null;
+      if (requestRef.current === controller) requestRef.current = null;
       setLoading(false);
     }
-  }
-
-  function cancel() {
-    cancelledRef.current = true;
-    xhrRef.current?.abort();
   }
 
   function apply() {
@@ -222,6 +165,17 @@ export function AiImportPanel({
 
   const modeLabel = result?.mode === "ia" ? "Análise concluída pela IA" : "Pré-análise local (texto)";
   const showSetupHint = error !== null && /configurar ia|chave/i.test(error);
+
+  const phaseMessage = phase === "enviando"
+    ? "Enviando documentos ao servidor…"
+    : phase === "recebido"
+      ? "Documentos recebidos. Preparando análise…"
+      : phase === "tentando_novamente"
+        ? "A conexão com o Google falhou. Tentando novamente…"
+        : phase === "alternativa"
+          ? "Tentando uma alternativa compatível do Gemini…"
+          : "Aguardando o resultado da análise da IA…";
+  const showGoogleHelp = error !== null && /Google|Gemini|cota/i.test(error);
 
   return (
     <section className={`card overflow-hidden ${variant === "hero" ? "ring-1 ring-brand/40" : ""}`}>
@@ -273,6 +227,7 @@ export function AiImportPanel({
           type="file"
           accept=".pdf,.jpg,.jpeg,.png,.webp,application/pdf,image/*"
           multiple
+          disabled={loading}
           className="hidden"
           onChange={(event) => {
             if (event.target.files) addFiles(event.target.files);
@@ -283,19 +238,23 @@ export function AiImportPanel({
         <div
           onDragOver={(event) => {
             event.preventDefault();
-            setDragging(true);
+            if (!loading) setDragging(true);
           }}
           onDragLeave={() => setDragging(false)}
           onDrop={(event) => {
             event.preventDefault();
             setDragging(false);
-            if (event.dataTransfer.files) addFiles(event.dataTransfer.files);
+            if (!loading && event.dataTransfer.files) addFiles(event.dataTransfer.files);
           }}
-          onClick={() => inputRef.current?.click()}
+          onClick={() => { if (!loading) inputRef.current?.click(); }}
           role="button"
-          tabIndex={0}
+          aria-disabled={loading}
+          tabIndex={loading ? -1 : 0}
           onKeyDown={(event) => {
-            if (event.key === "Enter" || event.key === " ") inputRef.current?.click();
+            if (!loading && (event.key === "Enter" || event.key === " ")) {
+              event.preventDefault();
+              inputRef.current?.click();
+            }
           }}
           className={`flex cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed px-4 py-7 text-center transition ${
             dragging ? "border-brand-dark bg-brand-soft" : "border-[#cfc9ae] bg-[#fffdf6] hover:border-brand-dark/70 hover:bg-brand-soft/50"
@@ -306,7 +265,7 @@ export function AiImportPanel({
           </span>
           <p className="mt-3 text-[13px] font-bold text-ink">Arraste aqui as propostas dos fornecedores</p>
           <p className="mt-1 text-[11.5px] text-slate-500">
-            PDF, JPG, PNG ou WEBP · até {MAX_FILES} arquivos · {status?.maxTotalUploadBytes ? "até 4 MB no total por envio" : "15 MB por arquivo"}
+            PDF, JPG, PNG ou WEBP · até {MAX_FILES} arquivos · {uploadLimit ? "até 4 MB no total por envio" : "até 15 MB por arquivo"}
           </p>
           <span className="mt-2.5 inline-flex items-center gap-1 rounded-md bg-white px-2.5 py-1 text-[11px] font-bold text-ink ring-1 ring-line">
             Selecionar arquivos
@@ -314,29 +273,40 @@ export function AiImportPanel({
         </div>
 
         {files.length > 0 && (
-          <ul className="mt-3 space-y-2">
-            {files.map((file) => (
-              <li
-                key={`${file.name}-${file.size}`}
-                className="flex items-center gap-2.5 rounded-lg border border-line bg-white px-2.5 py-2"
-              >
-                <FileIcon className="h-4 w-4 shrink-0 text-brand-dark" />
-                <span className="min-w-0 flex-1 truncate text-[12px] font-semibold text-ink">{file.name}</span>
-                <span className="text-[10.5px] text-slate-500">{formatBytes(file.size)}</span>
-                <button
-                  type="button"
-                  aria-label={`Remover ${file.name}`}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    setFiles((current) => current.filter((entry) => entry !== file));
-                  }}
-                  className="rounded-md p-1 text-slate-400 transition hover:bg-red-50 hover:text-red-600"
+          <div className="mt-3 space-y-2">
+            <div className="flex items-center justify-between text-[11px] font-semibold text-slate-600">
+              <span>{files.length} arquivo(s) selecionado(s)</span>
+              <span className={uploadLimit && totalFilesBytes > uploadLimit ? "font-bold text-red-600" : "text-slate-500"}>
+                Total: {formatBytes(totalFilesBytes)}{uploadLimit ? " / até 4 MB" : ""}
+              </span>
+            </div>
+            <ul className="space-y-2">
+              {files.map((file) => (
+                <li
+                  key={`${file.name}-${file.size}`}
+                  className="flex items-center gap-2.5 rounded-lg border border-line bg-white px-2.5 py-2"
                 >
-                  <CloseIcon className="h-3.5 w-3.5" />
-                </button>
-              </li>
-            ))}
-          </ul>
+                  <FileIcon className="h-4 w-4 shrink-0 text-brand-dark" />
+                  <span className="min-w-0 flex-1 truncate text-[12px] font-semibold text-ink">{file.name}</span>
+                  <span className="text-[10.5px] text-slate-500">{formatBytes(file.size)}</span>
+                  <button
+                    type="button"
+                    aria-label={`Remover ${file.name}`}
+                    disabled={loading}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setFiles((current) => current.filter((entry) => entry !== file));
+                      setResult(null);
+                      setApplied(false);
+                    }}
+                    className="rounded-md p-1 text-slate-400 transition hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    <CloseIcon className="h-3.5 w-3.5" />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
         )}
 
         <div className="mt-3">
@@ -350,7 +320,12 @@ export function AiImportPanel({
           {showText && (
             <textarea
               value={text}
-              onChange={(event) => setText(event.target.value)}
+              disabled={loading}
+              onChange={(event) => {
+                setText(event.target.value);
+                setResult(null);
+                setApplied(false);
+              }}
               rows={5}
               placeholder={"Cole aqui o conteúdo da proposta ou do orçamento.\nEx.: Fornecedor: HidroLuz Materiais Ltda.\nTubo PVC 25mm — 20 un — R$ 89,90"}
               className="field mt-2 resize-y font-mono text-[11.5px]"
@@ -359,15 +334,27 @@ export function AiImportPanel({
         </div>
 
         {error && (
-          <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2">
-            <p className="text-[12px] font-semibold leading-snug text-red-700">{error}</p>
-            {showSetupHint && (
+          <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2.5">
+            <p className="text-[12px] font-bold leading-snug text-red-700">{error}</p>
+            {(showSetupHint || showGoogleHelp) && (
               <div className="mt-2 flex flex-wrap gap-2">
-                <Link href="/configuracoes" className="btn btn-brand !py-1.5">
-                  Configurar IA agora
-                </Link>
+                {showSetupHint && (
+                  <Link href="/configuracoes" className="btn btn-brand !py-1.5">
+                    Configurar IA
+                  </Link>
+                )}
+                {showGoogleHelp && (
+                  <>
+                    <a href="https://aistudio.google.com/status" target="_blank" rel="noopener noreferrer" className="btn btn-ghost !py-1.5">
+                      Status do Google ↗
+                    </a>
+                    <a href="https://aistudio.google.com/usage" target="_blank" rel="noopener noreferrer" className="btn btn-ghost !py-1.5">
+                      Verificar cota ↗
+                    </a>
+                  </>
+                )}
                 <Link href="/ajuda/ia" className="btn btn-ghost !py-1.5">
-                  Ver passo a passo
+                  Ver ajuda
                 </Link>
               </div>
             )}
@@ -377,47 +364,48 @@ export function AiImportPanel({
         <div className="mt-3.5 flex flex-wrap items-center justify-between gap-2">
           <p className="max-w-sm text-[10.5px] leading-snug text-slate-500">
             {status?.connected
-              ? "Os arquivos são enviados ao provedor de IA configurado. Verifique os termos de privacidade antes de enviar dados reais."
-              : "Sem a IA ativada, use o texto colado ou preencha manualmente — nada de exemplo é criado."}
+              ? "Os arquivos são enviados ao provedor de IA configurado. Confira os termos de privacidade antes de enviar dados reais."
+              : "Sem a IA ativada, use o texto colado ou preencha manualmente."}
           </p>
           <button type="button" onClick={analyze} disabled={loading} className="btn btn-brand">
             <SparklesIcon className={loading ? "h-4 w-4 animate-pulse" : "h-4 w-4"} />
-            {loading ? STAGES[stage] : ctaLabel}
+            {loading ? `Analisando… ${progress}%` : ctaLabel}
           </button>
         </div>
 
         {loading && (
-          <div className="mt-3 overflow-hidden rounded-lg border border-brand/30 bg-brand-soft/70 px-3 py-2.5">
+          <div className="mt-3.5 rounded-xl border border-brand/40 bg-brand-soft/70 p-3.5" role="status" aria-live="polite">
             <div className="flex items-center justify-between gap-2">
-              <p className="text-[11.5px] font-bold text-ink">
-                {progress < 20 ? "Enviando arquivos…" : STAGES[stage]}
-              </p>
-              <span className="font-display text-[18px] leading-none text-ink tabular-nums">{progress}%</span>
+              <span className="text-[12px] font-extrabold text-ink">{phaseMessage}</span>
+              <span className="font-mono text-[13px] font-black text-brand-dark">~{progress}%</span>
             </div>
             <div
-              className="mt-2 h-2 w-full overflow-hidden rounded-full bg-white"
+              className="mt-2 h-2.5 w-full overflow-hidden rounded-full bg-white ring-1 ring-line"
               role="progressbar"
-              aria-label="Progresso da análise da IA"
+              aria-label="Progresso estimado da análise"
               aria-valuemin={0}
               aria-valuemax={100}
               aria-valuenow={progress}
+              aria-valuetext={`${progress}% estimado; aguardando a resposta da IA`}
             >
-              <div className="h-full rounded-full bg-brand transition-all duration-500" style={{ width: `${progress}%` }} />
+              <div
+                className="h-full rounded-full bg-gradient-to-r from-brand to-[#ffc14d] transition-all duration-500 ease-out"
+                style={{ width: `${progress}%` }}
+              />
             </div>
-            <p className="mt-1.5 text-[10.5px] font-semibold text-brand-dark">
-              {progress < 20
-                ? "Enviando os documentos para análise."
-                : elapsed < estimate
-                  ? `Tempo estimado restante: cerca de ${Math.max(1, estimate - elapsed)} s (decorrido ${elapsed} s).`
-                  : `Finalizando a leitura — documentos maiores podem levar mais tempo (decorrido ${elapsed} s).`}
+            <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-600">
+              <span>Tempo decorrido: <strong>{formatElapsed(elapsedSeconds)}</strong></span>
+              <button
+                type="button"
+                onClick={() => requestRef.current?.abort()}
+                className="font-bold text-ink underline decoration-brand underline-offset-2 hover:text-brand-dark"
+              >
+                Cancelar análise
+              </button>
+            </div>
+            <p className="mt-1.5 text-[10.5px] leading-snug text-slate-500">
+              A porcentagem é uma estimativa: o Google não informa o tempo exato. Várias propostas podem levar alguns minutos, mesmo quando os arquivos são pequenos.
             </p>
-            <button
-              type="button"
-              onClick={cancel}
-              className="btn btn-ghost mt-2 w-full !py-1.5"
-            >
-              Cancelar análise
-            </button>
           </div>
         )}
 
@@ -426,7 +414,7 @@ export function AiImportPanel({
             <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="inline-flex items-center gap-1.5 rounded-full bg-success-soft px-2.5 py-1 text-[10px] font-extrabold uppercase tracking-[0.08em] text-success">
                 <CheckIcon className="h-3 w-3" />
-                {modeLabel}
+                {modeLabel} · 100%
               </span>
               <span className="text-[10.5px] font-semibold text-slate-500">{result.provider}</span>
             </div>

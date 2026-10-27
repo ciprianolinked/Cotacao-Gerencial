@@ -107,19 +107,18 @@ test("três PDFs pequenos são comparados juntos em uma única análise", { time
   globalThis.fetch = async (_url, init) => {
     calls += 1;
     const body = JSON.parse(String(init?.body)) as {
-      model: string;
-      input: Array<{ type: string; data?: string }>;
-      generation_config?: { thinking_level?: string };
+      contents: Array<{ parts: Array<{ inlineData?: { mimeType: string } }> }>;
+      generationConfig?: { thinkingConfig?: { thinkingLevel?: string } };
     };
-    documentCount = body.input.filter((part) => part.type === "document").length;
-    assert.equal(body.model, "gemini-3.8-flash");
-    assert.equal(body.generation_config?.thinking_level, "low");
+    documentCount = body.contents[0].parts.filter((part) => part.inlineData?.mimeType === "application/pdf").length;
+    assert.match(String(_url), /gemini-3\.1-flash-lite:generateContent$/);
+    assert.equal(body.generationConfig?.thinkingConfig?.thinkingLevel, "low");
     const raw = {
       condominium: "Condomínio de teste",
       suppliers: [{ name: "Fornecedor A" }, { name: "Fornecedor B" }, { name: "Fornecedor C" }],
       items: [{ description: "Manutenção", unit: "serviço", quantity: 1, prices: [300, 250, 275] }],
     };
-    return Response.json({ status: "completed", steps: [{ type: "model_output", content: [{ type: "text", text: JSON.stringify(raw) }] }] });
+    return Response.json({ candidates: [{ finishReason: "STOP", content: { parts: [{ text: JSON.stringify(raw) }] } }] });
   };
 
   try {
@@ -156,7 +155,7 @@ test("falha do Google aciona alternativa sem perder os três PDFs", { timeout: 1
     };
     counts.push(body.input ? body.input.filter((part) => part.type === "document").length : body.contents?.[0].parts.filter((part) => "inlineData" in part).length ?? 0);
     if (calls < 4) return new Response("indisponível", { status: 503 });
-    assert.match(String(url), /gemini-3\.1-flash-lite:generateContent$/);
+    assert.match(String(url), /gemini-3\.8-flash:generateContent$/);
     const raw = {
       suppliers: [{ name: "Fornecedor A" }, { name: "Fornecedor B" }, { name: "Fornecedor C" }],
       items: [{ description: "Manutenção", unit: "serviço", quantity: 1, prices: [300, 250, 275] }],
@@ -173,9 +172,9 @@ test("falha do Google aciona alternativa sem perder os três PDFs", { timeout: 1
     const phases: string[] = [];
     const result = await readAiAnalysisResponse(response, (phase) => phases.push(phase));
     assert.deepEqual(counts, [3, 3, 3, 3]);
-    assert.deepEqual(phases, ["recebido", "analisando", "tentando_novamente", "alternativa", "alternativa"]);
+    assert.deepEqual(phases, ["recebido", "analisando", "alternativa", "alternativa", "alternativa"]);
     assert.equal(result.draft.suppliers.length, 3);
-    assert.match(result.provider, /gemini-3\.1-flash-lite/);
+    assert.match(result.provider, /gemini-3\.8-flash/);
     assert.ok(result.warnings.some((warning) => /modelo principal estava indisponível/i.test(warning)));
     assert.deepEqual(result.draft.suppliers.map((supplier) => result.draft.items[0].prices[supplier.id]), [300, 250, 275]);
   } finally {
@@ -196,8 +195,8 @@ test("três PDFs permanecem na mesma análise após mais de 52 segundos", {
   let documentCount = 0;
   globalThis.fetch = async (_url, init) => {
     observedSignal = init?.signal ?? null;
-    const body = JSON.parse(String(init?.body)) as { input: Array<{ type: string }> };
-    documentCount = body.input.filter((part) => part.type === "document").length;
+    const body = JSON.parse(String(init?.body)) as { contents: Array<{ parts: Array<{ inlineData?: { mimeType: string } }> }> };
+    documentCount = body.contents[0].parts.filter((part) => part.inlineData?.mimeType === "application/pdf").length;
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(resolve, 52_300);
       init?.signal?.addEventListener("abort", () => {
@@ -209,7 +208,7 @@ test("três PDFs permanecem na mesma análise após mais de 52 segundos", {
       suppliers: [{ name: "Fornecedor A" }, { name: "Fornecedor B" }, { name: "Fornecedor C" }],
       items: [{ description: "Manutenção", unit: "serviço", quantity: 1, prices: [300, 250, 275] }],
     };
-    return Response.json({ status: "completed", steps: [{ type: "model_output", content: [{ type: "text", text: JSON.stringify(raw) }] }] });
+    return Response.json({ candidates: [{ finishReason: "STOP", content: { parts: [{ text: JSON.stringify(raw) }] } }] });
   };
   try {
     const { POST } = await import("../src/app/api/ai/extract/route");

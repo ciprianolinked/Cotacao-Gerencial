@@ -1,45 +1,30 @@
 import { NextResponse } from "next/server";
-import { deleteCondominium, getCondominium, updateCondominium } from "@/lib/server/quotations";
+import { condominiumError, deleteCondominium, updateCondominium } from "@/lib/server/condominiums";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+type Context = { params: Promise<{ id: string }> };
 
-type RouteContext = { params: Promise<{ id: string }> };
-
-export async function GET(_request: Request, context: RouteContext) {
-  const { id } = await context.params;
-  const condominium = await getCondominium(id);
-  if (!condominium) {
-    return NextResponse.json({ error: "Condomínio não encontrado." }, { status: 404 });
-  }
-  return NextResponse.json({ condominium });
-}
-
-export async function PATCH(request: Request, context: RouteContext) {
-  const { id } = await context.params;
+export async function PATCH(request: Request, context: Context) {
   try {
-    const payload = await request.json();
-    const condominium = await updateCondominium(id, payload ?? {});
-    if (!condominium) {
-      return NextResponse.json({ error: "Condomínio não encontrado." }, { status: 404 });
-    }
+    const { id } = await context.params;
+    const payload: unknown = await request.json();
+    const condominium = await updateCondominium(id, payload);
+    if (!condominium) return NextResponse.json({ error: "Condomínio não encontrado." }, { status: 404 });
     return NextResponse.json({ condominium });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Erro ao salvar o condomínio.";
-    return NextResponse.json({ error: message }, { status: 400 });
+    return NextResponse.json({ error: condominiumError(error) }, { status: 400 });
   }
 }
 
-export async function DELETE(_request: Request, context: RouteContext) {
-  const { id } = await context.params;
+export async function DELETE(_request: Request, context: Context) {
   try {
+    const { id } = await context.params;
     const result = await deleteCondominium(id);
-    if (!result.ok) {
-      return NextResponse.json({ error: "Condomínio não encontrado." }, { status: 404 });
-    }
-    return NextResponse.json({ ok: true, quotationCount: result.quotationCount });
+    if (result === "not_found") return NextResponse.json({ error: "Condomínio não encontrado." }, { status: 404 });
+    if (result === "has_quotations") return NextResponse.json({ error: "Este condomínio possui mapas vinculados. Preserve o cadastro ou exclua os mapas antes de removê-lo." }, { status: 409 });
+    return NextResponse.json({ ok: true });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Erro ao excluir o condomínio.";
-    return NextResponse.json({ error: message }, { status: 400 });
+    return NextResponse.json({ error: condominiumError(error) }, { status: 400 });
   }
 }

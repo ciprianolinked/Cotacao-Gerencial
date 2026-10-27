@@ -30,16 +30,16 @@ export function AppShell({ children }: { children: ReactNode }) {
                 Mapas de cotação
               </Link>
               <Link
-                href="/dashboard"
-                className="rounded-lg px-3 py-2 text-[13px] font-semibold text-white/75 transition hover:bg-white/10 hover:text-white"
-              >
-                Indicadores
-              </Link>
-              <Link
                 href="/condominios"
                 className="rounded-lg px-3 py-2 text-[13px] font-semibold text-white/75 transition hover:bg-white/10 hover:text-white"
               >
                 Condomínios
+              </Link>
+              <Link
+                href="/indicadores"
+                className="rounded-lg px-3 py-2 text-[13px] font-semibold text-white/75 transition hover:bg-white/10 hover:text-white"
+              >
+                Indicadores
               </Link>
               <Link
                 href="/configuracoes"
@@ -73,6 +73,12 @@ export function AppShell({ children }: { children: ReactNode }) {
             </Link>
           </div>
         </div>
+        <nav aria-label="Navegação móvel" className="flex gap-4 overflow-x-auto border-t border-white/10 px-4 pb-2 pt-1.5 text-[11px] font-semibold text-white/75 md:hidden">
+          <Link href="/" className="whitespace-nowrap">Painel</Link>
+          <Link href="/condominios" className="whitespace-nowrap">Condomínios</Link>
+          <Link href="/indicadores" className="whitespace-nowrap">Indicadores</Link>
+          <Link href="/configuracoes" className="whitespace-nowrap">Configurar IA</Link>
+        </nav>
       </header>
       {children}
     </div>

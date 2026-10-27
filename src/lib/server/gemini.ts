@@ -1,254 +1,382 @@
 const GEMINI_INTERACTIONS_URL = "https://generativelanguage.googleapis.com/v1beta/interactions";
+const GEMINI_GENERATE_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
 
-/**
- * Flash-Lite é o padrão porque, em testes com propostas reais, respondeu em
- * ~1 s (contra ~130 s do 3.8-flash) e extraiu itens e preços com mais precisão.
- */
-export const DEFAULT_GEMINI_MODEL = "gemini-3.5-flash-lite";
+// O modelo Flash-Lite possui suporte a PDFs, imagens e saída estruturada e foi
+// verificado com a API nativa do Google para a leitura de cotações.
+export const DEFAULT_GEMINI_MODEL = "gemini-3.1-flash-lite";
+// O Flash continua disponível como alternativa quando houver instabilidade.
+export const FALLBACK_GEMINI_MODEL = "gemini-3.8-flash";
+export const GEMINI_ANALYSIS_TIMEOUT_MS = 210_000;
+// O Google pode solicitar intervalos de 30 segundos em erros 503.
+// Respeitamos o cabeçalho Retry-After sem exceder o tempo total da análise.
+const MAX_RETRY_AFTER_MS = 60_000;
 
-/** Ordem de tentativa quando um modelo está sobrecarregado (503) ou sem cota (429). */
-export const GEMINI_FALLBACK_MODELS = [
-  "gemini-3.5-flash-lite",
-  "gemini-3.1-flash-lite",
-  "gemini-3.6-flash",
-  "gemini-3.8-flash",
-];
-
-// Modelos antigos ou lentos demais para esta tarefa são trocados pelo padrão.
-const REPLACED_MODELS = /^gemini-(2\.5-flash|3\.8-flash)(?:-latest|-001)?$/i;
-
-/** Mantém modelos personalizados, mas troca os desativados/inadequados pelo padrão. */
+/** Mantém configurações personalizadas, mas substitui o modelo antigo indisponível. */
 export function resolveGeminiModel(configuredModel?: string): string {
   const model = (configuredModel ?? "").trim().replace(/^models\//i, "");
-  if (!model || REPLACED_MODELS.test(model)) {
+  if (!model || /^gemini-2\.5-flash(?:-latest|-001)?$/i.test(model)) {
     return DEFAULT_GEMINI_MODEL;
   }
   return model;
-}
-
-/** Lista de modelos a tentar, começando pelo configurado e sem repetições. */
-export function buildModelChain(configuredModel?: string): string[] {
-  const primary = resolveGeminiModel(configuredModel);
-  return [primary, ...GEMINI_FALLBACK_MODELS.filter((model) => model !== primary)];
 }
 
 export type GeminiInputPart =
   | { type: "text"; text: string }
   | { type: "document" | "image"; data: string; mime_type: string };
 
+export type GeminiRetryPhase = "retrying" | "alternative";
+
 type InteractionResponse = {
   status?: string;
   output_text?: string;
+  error?: { code?: string; message?: string };
   steps?: Array<{
     type?: string;
     content?: Array<{ type?: string; text?: string }>;
   }>;
 };
 
-type GoogleApiErrorBody = {
-  error?: {
-    code?: number;
-    message?: string;
-    status?: string;
-    details?: Array<{ "@type"?: string; retryDelay?: string; reason?: string }>;
-  };
+type GenerateResponse = {
+  candidates?: Array<{
+    finishReason?: string;
+    content?: { parts?: Array<{ text?: string; thought?: boolean }> };
+  }>;
+  promptFeedback?: { blockReason?: string };
 };
 
-/** Extrai o motivo real vindo do Google (ex.: modelo sobrecarregado) e o tempo sugerido de espera. */
-function parseGoogleError(details: string): { status?: string; message?: string; retryDelayMs?: number } {
-  try {
-    const parsed = JSON.parse(details) as GoogleApiErrorBody;
-    const err = parsed?.error;
-    if (!err || typeof err !== "object") return {};
-    let retryDelayMs: number | undefined;
-    for (const item of err.details ?? []) {
-      const match = /(\d+(?:\.\d+)?)s/.exec(typeof item?.retryDelay === "string" ? item.retryDelay : "");
-      if (match) {
-        retryDelayMs = Math.round(parseFloat(match[1]) * 1000);
-        break;
-      }
-    }
-    return {
-      status: typeof err.status === "string" ? err.status : undefined,
-      message: typeof err.message === "string" ? err.message : undefined,
-      retryDelayMs,
-    };
-  } catch {
-    return {};
-  }
-}
-
-function friendlyGeminiError(status: number, details: string): string {
-  const google = parseGoogleError(details);
-  const googleInfo = `${google.status ?? ""} ${google.message ?? ""}`;
-  if (status === 401 || (status === 400 && /api.?key.*not valid|api_key_invalid|api key invalid/i.test(details))) {
-    return "A chave do Gemini não é válida. Copie a chave completa no Google AI Studio e confira em Configurar IA.";
-  }
-  if (status === 403) {
-    return "O Google recusou o acesso (erro 403). Verifique se a chave está ativa, se a API Gemini está habilitada e se o projeto pode usar o modelo selecionado.";
-  }
-  if (status === 404) {
-    return "O modelo Gemini configurado não está disponível para esta chave (erro 404). Confira o acesso ao gemini-3.8-flash no Google AI Studio e, se definiu GEMINI_MODEL na hospedagem, atualize ou remova essa variável e publique novamente.";
-  }
-  if (status === 429) {
-    return "O Google informou limite de uso ou falta de cota para o modelo (erro 429). Confira a disponibilidade e os limites do projeto no Google AI Studio e tente novamente após a renovação da cota.";
-  }
-  if (status === 503 || /high demand|overloaded|UNAVAILABLE/i.test(googleInfo)) {
-    return "Todos os modelos do Google estão sobrecarregados neste momento (erro 503). O aplicativo já tentou alternativas automaticamente. Aguarde alguns minutos e tente de novo — seus arquivos continuam selecionados.";
-  }
-  if (status === 500 || status === 502 || status === 504) {
-    return `O Google devolveu um erro temporário (erro ${status}). Aguarde alguns minutos e tente novamente; se repetir várias vezes seguidas, confira a página de status do Google AI Studio.`;
-  }
-  if (status === 400) {
-    return "O Google não conseguiu processar esta solicitação (erro 400). Confira se os PDFs e imagens estão válidos e tente novamente.";
-  }
-  return `Não foi possível concluir a solicitação ao Gemini (erro ${status}). Confira a configuração e tente novamente.`;
-}
-
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-// Falhas temporárias do Google que valem uma nova tentativa automática.
-const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
-// A rota permite 300 s no total; a volta automática respeita esta margem de segurança.
-const GEMINI_OVERALL_BUDGET_MS = 285_000;
-const MAX_ATTEMPTS_PER_MODEL = 2;
-
-/**
- * Usa a API Interactions do Google para texto, imagens, PDFs e JSON estruturado.
- * A chave é enviada apenas no cabeçalho da requisição feita pelo servidor.
- */
-export async function createGeminiInteraction({
-  model,
-  apiKey,
-  input,
-  responseSchema,
-  generationConfig,
-  timeoutMs = 120_000,
-}: {
+type GeminiRequest = {
   model: string;
   apiKey: string;
   input: GeminiInputPart[];
   responseSchema?: unknown;
-  generationConfig?: Record<string, unknown>;
   timeoutMs?: number;
-}): Promise<string> {
-  const key = apiKey.trim();
-  if (!key) throw new Error("Informe a chave do Gemini em Configurar IA.");
+  signal?: AbortSignal;
+  onRetry?: (phase: GeminiRetryPhase) => void;
+  preferredTransport?: "interactions" | "generateContent";
+  /** Permite testes rápidos; em produção é usado o intervalo recomendado. */
+  retryBaseDelayMs?: number;
+};
 
-  const chain = buildModelChain(model);
-  const overallStart = Date.now();
-  const fileCount = input.filter((part) => part.type !== "text").length;
-  let lastStatus = 0;
-  let lastDetails = "";
+export type GeminiInteractionResult = {
+  text: string;
+  model: string;
+  usedAlternative: boolean;
+  switchedModel: boolean;
+};
 
-  // Percorre os modelos: se um estiver sobrecarregado (503) ou sem cota (429),
-  // tenta automaticamente o próximo, dentro do tempo disponível da requisição.
-  for (let index = 0; index < chain.length; index++) {
-    const currentModel = chain[index];
-    const body: Record<string, unknown> = { model: currentModel, input, store: false };
-    if (responseSchema) {
-      body.response_format = { type: "text", mime_type: "application/json", schema: responseSchema };
-    }
-    if (generationConfig) body.generation_config = generationConfig;
-    const payload = JSON.stringify(body);
+type Transport = "interactions" | "generateContent";
 
-    for (let attempt = 1; attempt <= MAX_ATTEMPTS_PER_MODEL; attempt++) {
-      const remaining = GEMINI_OVERALL_BUDGET_MS - (Date.now() - overallStart);
-      const attemptTimeout = Math.min(timeoutMs, remaining);
-      if (attemptTimeout < 15_000) {
-        throw new Error(
-          lastStatus
-            ? friendlyGeminiError(lastStatus, lastDetails)
-            : "O tempo disponível para a análise se esgotou. Tente com menos arquivos por vez (por exemplo, 1 PDF).",
-        );
-      }
-
-      const attemptStart = Date.now();
-      let response: Response;
-      try {
-        response = await fetch(GEMINI_INTERACTIONS_URL, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "x-goog-api-key": key },
-          body: payload,
-          signal: AbortSignal.timeout(attemptTimeout),
-        });
-      } catch (error) {
-        const waited = Math.round((Date.now() - attemptStart) / 1000);
-        const isTimeout = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
-        console.error(
-          `[gemini] ${currentModel} tentativa ${attempt}: ${isTimeout ? "timeout" : "falha de rede"} após ${waited}s · ${fileCount} arquivo(s)`,
-        );
-        const left = GEMINI_OVERALL_BUDGET_MS - (Date.now() - overallStart);
-        // Tempo esgotado em um modelo: vale tentar o próximo, que costuma ser mais rápido.
-        if (index < chain.length - 1 && left > 40_000) break;
-        if (!isTimeout && attempt < MAX_ATTEMPTS_PER_MODEL && left > 60_000) {
-          await sleep(4000);
-          continue;
-        }
-        throw new Error(
-          isTimeout
-            ? `O Google Gemini não respondeu a tempo (${waited}s). Tente novamente com menos arquivos por vez (por exemplo, 1 PDF).`
-            : "Não foi possível conectar ao Google Gemini. Verifique a conexão e tente novamente.",
-        );
-      }
-
-      if (response.ok) {
-        console.log(
-          `[gemini] ok em ${Math.round((Date.now() - attemptStart) / 1000)}s · modelo ${currentModel} · tentativa ${attempt} · ${fileCount} arquivo(s)`,
-        );
-        return parseInteractionText(await response.json().catch(() => null));
-      }
-
-      lastStatus = response.status;
-      lastDetails = await response.text().catch(() => "");
-      const google = parseGoogleError(lastDetails);
-      console.error(
-        `[gemini] ${currentModel} tentativa ${attempt}: http ${response.status}${google.status ? ` (${google.status})` : ""} · ${lastDetails.replace(/\s+/g, " ").slice(0, 160)}`,
-      );
-
-      const left = GEMINI_OVERALL_BUDGET_MS - (Date.now() - overallStart);
-      if (!RETRYABLE_STATUS.has(response.status)) {
-        // Erro definitivo (chave inválida, arquivo inválido): não adianta trocar de modelo.
-        throw new Error(friendlyGeminiError(response.status, lastDetails));
-      }
-      // Sobrecarga ou cota: parte direto para o próximo modelo, que pode estar livre.
-      if (index < chain.length - 1 && left > 40_000) break;
-      if (attempt < MAX_ATTEMPTS_PER_MODEL && left > 60_000) {
-        const delay = Math.min(google.retryDelayMs ?? 4000 * attempt, 12_000);
-        console.log(`[gemini] nova tentativa em ${Math.round(delay / 1000)}s`);
-        await sleep(delay);
-        continue;
-      }
-      break;
-    }
+class GoogleApiError extends Error {
+  constructor(
+    public readonly status: number,
+    public readonly code: string,
+    public readonly retryAfterMs: number | null,
+    public readonly invalidKey: boolean,
+    public readonly dailyQuota: boolean = false,
+  ) {
+    super(`Google Gemini retornou HTTP ${status}`);
+    this.name = "GoogleApiError";
   }
+}
 
-  throw new Error(
-    lastStatus
-      ? friendlyGeminiError(lastStatus, lastDetails)
-      : "Não foi possível concluir a análise no Google Gemini. Tente novamente em alguns minutos.",
+function parseGoogleError(status: number, details: string, retryAfter: string | null): GoogleApiError {
+  let code = "";
+  try {
+    const parsed: unknown = JSON.parse(details);
+    const entry = Array.isArray(parsed) ? parsed[0] : parsed;
+    if (entry && typeof entry === "object" && "error" in entry) {
+      const value = (entry as { error?: { code?: unknown; status?: unknown } }).error;
+      code = typeof value?.code === "string" ? value.code : typeof value?.status === "string" ? value.status : "";
+    }
+  } catch {
+    // Algumas falhas da rede ou do Google não vêm em JSON.
+  }
+  let retryAfterMs: number | null = null;
+  if (retryAfter) {
+    const seconds = Number(retryAfter);
+    const value = Number.isFinite(seconds) ? seconds * 1000 : Date.parse(retryAfter) - Date.now();
+    if (Number.isFinite(value) && value >= 0) retryAfterMs = value;
+  }
+  return new GoogleApiError(
+    status,
+    code.toLowerCase(),
+    retryAfterMs,
+    /api.?key.*not valid|api_key_invalid|api key invalid/i.test(details),
+    /quota_exceeded|per.?day|daily.?quota|daily.?limit|requests.?per.?day/i.test(`${code} ${details}`),
   );
 }
 
-/** Extrai o texto da resposta da API Interactions (campo direto ou etapas do modelo). */
-function parseInteractionText(result: unknown): string {
-  const data = (result ?? {}) as InteractionResponse;
-  if (!data || typeof data !== "object") {
-    throw new Error("O Google Gemini retornou uma resposta inválida. Tente novamente.");
+function friendlyGeminiError(error: GoogleApiError): string {
+  const { status, invalidKey } = error;
+  if (status === 401 || (status === 400 && invalidKey)) {
+    return "A chave do Gemini não é válida. Copie a chave completa no Google AI Studio e confira em Configurar IA.";
   }
-  if (data.status && data.status !== "completed") {
-    throw new Error("O Google Gemini não concluiu a análise. Tente novamente ou envie arquivos menores.");
+  if (status === 402) {
+    return "O Google informou que o projeto não tem créditos disponíveis. Confira o faturamento ou a cota do projeto no Google AI Studio.";
   }
-  const text =
-    data.output_text ||
-    (data.steps ?? [])
+  if (status === 403) {
+    return "O Google recusou o acesso. Verifique se a chave está ativa, se a API Gemini está habilitada e se o projeto pode usar o modelo selecionado.";
+  }
+  if (status === 404 || status === 501) {
+    return "O modelo Gemini configurado não está disponível para esta chave. Confira os modelos habilitados no Google AI Studio e a variável GEMINI_MODEL da hospedagem.";
+  }
+  if (status === 429) {
+    return "O Google informou limite de uso ou falta de cota para o modelo. Seus arquivos continuam selecionados. Confira os limites no Google AI Studio e tente novamente após a renovação da cota.";
+  }
+  if (status === 400) {
+    return "O Google não conseguiu processar esta solicitação. Confira se os PDFs e imagens estão válidos e tente novamente.";
+  }
+  if (status === 408 || status === 504) {
+    return `O Google não concluiu a análise a tempo (código ${status}). Seus arquivos continuam selecionados. Confira o status do Gemini e tente novamente.`;
+  }
+  if (status >= 500) {
+    return `O Google não conseguiu concluir a análise (código ${status}). Seus arquivos continuam selecionados. Verifique o status do Gemini e tente novamente.`;
+  }
+  return `Não foi possível concluir a solicitação ao Gemini (erro ${status}). Confira a configuração e tente novamente.`;
+}
+
+function retryableStatus(status: number): boolean {
+  return status === 408 || status === 429 || status === 500 || status === 502 || status === 503 || status === 504;
+}
+
+function isDailyQuota(error: GoogleApiError): boolean {
+  return error.dailyQuota || error.code === "quota_exceeded" || /daily|per_day|perday/.test(error.code);
+}
+
+function requestFor(
+  transport: Transport,
+  model: string,
+  input: GeminiInputPart[],
+  responseSchema?: unknown,
+): { url: string; body: Record<string, unknown> } {
+  const useLowThinking = /^gemini-3(?:\.|-)/i.test(model);
+  if (transport === "interactions") {
+    const body: Record<string, unknown> = { model, input, store: false };
+    if (useLowThinking) body.generation_config = { thinking_level: "low" };
+    if (responseSchema) {
+      body.response_format = { type: "text", mime_type: "application/json", schema: responseSchema };
+    }
+    return { url: GEMINI_INTERACTIONS_URL, body };
+  }
+
+  // GenerateContent é uma segunda API oficial do Google; mantém os mesmos PDFs,
+  // imagem, chave e esquema. Não são feitas análises separadas nem mapas parciais.
+  const parts = input.map((part) =>
+    part.type === "text"
+      ? { text: part.text }
+      : { inlineData: { mimeType: part.mime_type, data: part.data } },
+  );
+  const generationConfig: Record<string, unknown> = {};
+  if (useLowThinking) generationConfig.thinkingConfig = { thinkingLevel: "low" };
+  if (responseSchema) {
+    generationConfig.responseFormat = { text: { mimeType: "APPLICATION_JSON", schema: responseSchema } };
+  }
+  return {
+    url: `${GEMINI_GENERATE_BASE}/${encodeURIComponent(model)}:generateContent`,
+    body: { contents: [{ role: "user", parts }], generationConfig },
+  };
+}
+
+function getResponseText(data: unknown, transport: Transport): string {
+  if (!data || typeof data !== "object") throw new Error("O Google Gemini retornou uma resposta inválida. Tente novamente.");
+  if (transport === "interactions") {
+    const result = data as InteractionResponse;
+    if (result.status === "failed" && result.error) {
+      const code = (result.error.code ?? "").toLowerCase();
+      if (/api_error|service_unavailable|deadline_exceeded/.test(code)) {
+        throw new GoogleApiError(code === "deadline_exceeded" ? 504 : 503, code, null, false);
+      }
+      if (/rate_limit_exceeded|quota_exceeded|too_many_requests/.test(code)) {
+        throw new GoogleApiError(429, code, null, false);
+      }
+    }
+    if (result.status && result.status !== "completed") {
+      throw new Error("O Google Gemini não concluiu a análise. Seus arquivos continuam selecionados; tente novamente.");
+    }
+    const text = result.output_text || (result.steps ?? [])
       .filter((step) => step.type === "model_output")
       .flatMap((step) => step.content ?? [])
       .filter((part) => part.type === "text" && typeof part.text === "string")
       .map((part) => part.text)
       .join("");
-  if (!text?.trim()) {
-    throw new Error("O Google Gemini não retornou uma resposta de texto. Tente novamente.");
+    if (!text?.trim()) throw new Error("O Google Gemini não retornou uma resposta de texto. Tente novamente.");
+    return text;
   }
+
+  const result = data as GenerateResponse;
+  const candidate = result.candidates?.[0];
+  if (result.promptFeedback?.blockReason || (candidate?.finishReason && candidate.finishReason !== "STOP")) {
+    throw new Error("O Google não concluiu a leitura dos documentos. Confira se os arquivos estão acessíveis e tente novamente.");
+  }
+  const text = (candidate?.content?.parts ?? [])
+    .filter((part) => !part.thought && typeof part.text === "string")
+    .map((part) => part.text)
+    .join("");
+  if (!text.trim()) throw new Error("O Google Gemini não retornou uma resposta de texto. Tente novamente.");
   return text;
+}
+
+async function waitForRetry(delayMs: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) throw new Error("Operação interrompida");
+  await new Promise<void>((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new Error("Operação interrompida"));
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, delayMs);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+/**
+ * Tenta a API Interactions, repete falhas transitórias e, se necessário, usa
+ * GenerateContent e um modelo compatível. A chave nunca vai ao navegador.
+ */
+export async function createGeminiInteractionDetailed({
+  model,
+  apiKey,
+  input,
+  responseSchema,
+  timeoutMs = GEMINI_ANALYSIS_TIMEOUT_MS,
+  signal,
+  onRetry,
+  preferredTransport,
+  retryBaseDelayMs = 600,
+}: GeminiRequest): Promise<GeminiInteractionResult> {
+  const key = apiKey.trim();
+  if (!key) throw new Error("Informe a chave do Gemini em Configurar IA.");
+
+  const primaryModel = resolveGeminiModel(model);
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  const requestSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
+  const timeoutMessage = "O Gemini não respondeu dentro do tempo disponível. Os arquivos continuam selecionados; tente novamente. Se o problema persistir, confira o status e a cota do Google AI Studio.";
+  const alternativeModel = primaryModel === DEFAULT_GEMINI_MODEL
+    ? FALLBACK_GEMINI_MODEL
+    : primaryModel === FALLBACK_GEMINI_MODEL
+      ? DEFAULT_GEMINI_MODEL
+      : null;
+  // Cada tentativa tem um prazo próprio. Uma conexão parada não pode consumir
+  // os 210 segundos inteiros e impedir o uso de um modelo/endpoint alternativo.
+  // Para PDFs e imagens, a API multimodal GenerateContent costuma responder
+  // mais rapidamente; para o teste simples de chave, mantemos Interactions.
+  const firstTransport: Transport = preferredTransport ?? (input.some((part) => part.type !== "text") ? "generateContent" : "interactions");
+  const alternateTransport: Transport = firstTransport === "interactions" ? "generateContent" : "interactions";
+  const attempts: Array<{ transport: Transport; model: string; timeoutMs: number }> =
+    primaryModel === FALLBACK_GEMINI_MODEL && alternativeModel
+      ? [
+          { transport: firstTransport, model: primaryModel, timeoutMs: 65_000 },
+          { transport: firstTransport, model: alternativeModel, timeoutMs: 45_000 },
+          { transport: alternateTransport, model: alternativeModel, timeoutMs: 45_000 },
+          { transport: alternateTransport, model: primaryModel, timeoutMs: 45_000 },
+        ]
+      : [
+          { transport: firstTransport, model: primaryModel, timeoutMs: 65_000 },
+          { transport: alternateTransport, model: primaryModel, timeoutMs: 45_000 },
+          { transport: firstTransport, model: primaryModel, timeoutMs: 45_000 },
+          ...(alternativeModel
+            ? [{ transport: firstTransport, model: alternativeModel, timeoutMs: 45_000 }]
+            : []),
+        ];
+  let index = 0;
+  let previousError: GoogleApiError | null = null;
+
+  function checkAbort() {
+    if (signal?.aborted) throw new Error("Análise cancelada. Os arquivos continuam selecionados.");
+    if (timeoutSignal.aborted) throw new Error(timeoutMessage);
+  }
+
+  while (index < attempts.length) {
+    checkAbort();
+    const attempt = attempts[index];
+    const { url, body } = requestFor(attempt.transport, attempt.model, input, responseSchema);
+    const attemptTimeout = AbortSignal.timeout(attempt.timeoutMs);
+    const attemptSignal = AbortSignal.any([requestSignal, attemptTimeout]);
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-goog-api-key": key },
+        body: JSON.stringify(body),
+        signal: attemptSignal,
+      });
+      if (attemptTimeout.aborted) throw new GoogleApiError(504, "attempt_timeout", null, false);
+      if (!response.ok) {
+        const details = await response.text().catch(() => "");
+        checkAbort();
+        throw parseGoogleError(response.status, details, response.headers.get("retry-after"));
+      }
+      let data: unknown;
+      try {
+        data = await response.json();
+      } catch {
+        checkAbort();
+        if (attemptTimeout.aborted) throw new GoogleApiError(504, "attempt_timeout", null, false);
+        throw new Error("O Google Gemini retornou uma resposta inválida. Tente novamente.");
+      }
+      checkAbort();
+      if (attemptTimeout.aborted) throw new GoogleApiError(504, "attempt_timeout", null, false);
+      const text = getResponseText(data, attempt.transport);
+      return {
+        text,
+        model: attempt.model,
+        usedAlternative: index > 0,
+        switchedModel: attempt.model !== primaryModel,
+      };
+    } catch (error) {
+      checkAbort();
+      const apiError = attemptTimeout.aborted
+        ? new GoogleApiError(504, "attempt_timeout", null, false)
+        : error instanceof GoogleApiError ? error : null;
+      const networkError = error instanceof TypeError;
+      if (!apiError && !networkError) throw error;
+      if (apiError) previousError = apiError;
+
+      // Não repetir credenciais, permissões, argumentos inválidos ou cota diária.
+      if (apiError && !retryableStatus(apiError.status) && apiError.status !== 404 && apiError.status !== 501) {
+        throw new Error(friendlyGeminiError(apiError));
+      }
+      if (apiError?.status === 429 && (isDailyQuota(apiError) || index > 0)) {
+        throw new Error(friendlyGeminiError(apiError));
+      }
+      if (apiError?.retryAfterMs !== null && apiError?.retryAfterMs !== undefined && apiError.retryAfterMs > MAX_RETRY_AFTER_MS) {
+        throw new Error(friendlyGeminiError(apiError));
+      }
+
+      let nextIndex = index + 1;
+      // Se Interactions não estiver disponível, passe à próxima API compatível.
+      if (apiError && (apiError.status === 404 || apiError.status === 501) && attempt.transport === "interactions") {
+        const alternate = attempts.findIndex((candidate, position) => position > index && candidate.transport === "generateContent");
+        if (alternate >= 0) nextIndex = alternate;
+      }
+      // Um limite de cota não deve ser contornado trocando de modelo.
+      if (apiError?.status === 429 && (nextIndex > 1 || attempts[nextIndex]?.model !== attempt.model)) {
+        throw new Error(friendlyGeminiError(apiError));
+      }
+      if (nextIndex >= attempts.length) {
+        if (previousError) throw new Error(friendlyGeminiError(previousError));
+        throw new Error("Não foi possível conectar ao Google Gemini após novas tentativas. Seus arquivos continuam selecionados; verifique a conexão e tente novamente.");
+      }
+
+      const next = attempts[nextIndex];
+      onRetry?.(next.transport === attempt.transport && next.model === attempt.model ? "retrying" : "alternative");
+      const base = Math.max(0, retryBaseDelayMs) * 2 ** Math.min(index, 2);
+      const backoff = base + (base ? Math.floor(Math.random() * base * 0.25) : 0);
+      const delay = Math.max(backoff, apiError?.retryAfterMs ?? 0);
+      try {
+        await waitForRetry(delay, requestSignal);
+      } catch {
+        checkAbort();
+        throw new Error("Não foi possível conectar ao Google Gemini. Tente novamente.");
+      }
+      index = nextIndex;
+    }
+  }
+  throw new Error("Não foi possível concluir a análise. Tente novamente.");
+}
+
+/** Compatibilidade para chamadas que precisam apenas do texto. */
+export async function createGeminiInteraction(request: GeminiRequest): Promise<string> {
+  return (await createGeminiInteractionDetailed(request)).text;
 }

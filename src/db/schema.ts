@@ -50,13 +50,30 @@ export const quotations = pgTable(
   (table) => [index("quotations_date_idx").on(table.analysisDate)],
 );
 
-// Configurações do aplicativo (ex.: chave da IA gratuita configurada pelo painel).
 export const appSettings = pgTable("app_settings", {
   key: text("key").primaryKey(),
   value: text("value").notNull().default(""),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+/** Metadados de PDFs baixados: registra nome, tipo, mapa relacionado e filtros. */
+export const documentDownloads = pgTable(
+  "document_downloads",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    documentType: text("document_type").notNull(),
+    fileName: text("file_name").notNull(),
+    quotationId: uuid("quotation_id").references(() => quotations.id, { onDelete: "set null" }),
+    filters: jsonb("filters").$type<Record<string, string | number | boolean | null>>().notNull().default({}),
+    downloadedAt: timestamp("downloaded_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index("document_downloads_date_idx").on(table.downloadedAt),
+    index("document_downloads_quotation_idx").on(table.quotationId),
+  ],
+);
+
 export type QuotationRow = typeof quotations.$inferSelect;
 export type CondominiumRow = typeof condominiums.$inferSelect;
 export type AppSettingRow = typeof appSettings.$inferSelect;
+export type DocumentDownloadRow = typeof documentDownloads.$inferSelect;

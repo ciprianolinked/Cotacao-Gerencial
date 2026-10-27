@@ -134,7 +134,7 @@ export function AiSettingsForm({ initial }: { initial: InitialState }) {
 
         <div className="px-4 py-4 sm:px-5">
           <label htmlFor="gemini-key">
-            <span className="label">Chave gratuita do Google Gemini (começa com AIza…)</span>
+            <span className="label">Chave de API do Google Gemini</span>
           </label>
           <div className="mt-1.5 flex flex-col gap-2 sm:flex-row">
             <div className="relative flex-1">

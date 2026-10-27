@@ -1,8 +1,9 @@
 import { ACCEPTED_UPLOAD_TYPES, CATEGORIES, MAX_FILES, MAX_FILE_BYTES } from "./constants";
 import type { AiExtractionResult, QuotationKind, QuoteItem, Supplier } from "./types";
-import { normalizeNature, round2, todayISO, uid } from "./quotation";
+import { parseCurrencyInput, round2, todayISO, uid } from "./quotation";
 import { getGeminiKey } from "./server/quotations";
-import { createGeminiInteraction, resolveGeminiModel, type GeminiInputPart } from "./server/gemini";
+import { createGeminiInteractionDetailed, resolveGeminiModel, type GeminiInputPart } from "./server/gemini";
+import type { AiAnalysisPhase } from "./ai-stream";
 
 export type UploadInput = {
   name: string;
@@ -37,8 +38,8 @@ type RawSupplier = {
 
 type RawItem = {
   description?: string;
+  costType?: string;
   unit?: string;
-  nature?: string;
   quantity?: number | null;
   prices?: (number | string | null)[];
 };
@@ -98,20 +99,15 @@ Regras obrigatórias:
 1. Extraia o condomínio/associação destinatário quando aparecer; caso não apareça, use "${hints.condominium || ""}" (pode ficar vazio).
 2. Identifique TODOS os fornecedores com proposta (até 5) e todos os itens/serviços cotados.
 3. Para cada item, informe "prices": um array de números na MESMA ORDEM dos fornecedores listados. Use null quando o fornecedor não cotou o item. Informe o valor UNITÁRIO em reais, sem símbolo e usando ponto decimal.
-4. Quando o documento trouxer apenas o total por fornecedor, distribua o total no item de maior representatividade (ou em item único "Fornecimento global conforme escopo").
-5. "quantity" deve ser numérica (default 1). Unidades comuns: un, serviço, mês, m², m, kg, L, cx, hora, vb (verba).
-5.1. OBRIGATÓRIO: classifique cada item em "nature" com um destes valores:
-   - "material": peças, insumos e equipamentos fornecidos (tubos, cabos, tintas, bombas, filtros, disjuntores).
-   - "mao_de_obra": execução, instalação, montagem, visita técnica, hora técnica, diária, manutenção e serviços em geral.
-   - "outros": quando não for possível separar (ex.: frete, taxas, ART, verba global, "material e mão de obra inclusos").
-5.2. Quando a proposta apresentar material e mão de obra separados para o mesmo escopo (ex.: "Instalação de bomba — material R$ 800 / mão de obra R$ 400"), crie DOIS itens distintos, um com nature "material" e outro com nature "mao_de_obra", para permitir o comparativo correto.
-6. Classifique "kind" como "servico" ou "produtos" conforme a natureza predominante.
-7. Classifique "category" escolhendo exatamente uma das opções: ${CATEGORIES.join(" | ")}.
-8. Extraia condições comerciais: prazo de entrega/execução, condições de pagamento, validade da proposta e contato.
-9. "description" deve resumir o escopo cotado com as premissas relevantes (2 a 5 frases). "service" é o objeto curto (ex.: "Manutenção preventiva de bombas").
-10. Em "analysis", escreva um parecer técnico comparando cobertura, valor global e condições. Recomende a proposta mais vantajosa considerando que cobertura incompleta pode invalidar a comparação.
-11. Responda EXCLUSIVAMENTE com JSON válido seguindo o schema informado, sem markdown.
-12. "analysisDate" deve ser a data da análise em formato AAAA-MM-DD quando identificada; caso contrário use ${todayISO()}.
+4. Classifique cada linha em "costType": "mao_obra" para execução/instalação/serviço, "material" para peças ou produtos, e "nao_discriminado" quando o documento informar apenas valor global ou combinar mão de obra e material sem separação.
+5. Se o fornecedor discriminar mão de obra e material em valores separados, crie linhas separadas com os valores exatos. NÃO estime, invente ou divida preços globais. Se só houver preço global, registre uma linha "Fornecimento global conforme proposta" com "costType":"nao_discriminado". Não duplique subtotais ou valores totais junto com itens detalhados.
+6. Unifique itens equivalentes entre propostas apenas quando a descrição, unidade e quantidade forem comparáveis. Se um fornecedor não cotou um item, deixe seu preço como null, não zero. Se quantidades ou escopos forem diferentes, registre linhas distintas e ressalvas.
+7. "quantity" deve ser numérica (default 1). Unidades comuns: un, serviço, mês, m², m, kg, L, cx, hora, vb (verba).
+8. Classifique "kind" como "servico" ou "produtos" e "category" escolhendo exatamente uma opção: ${CATEGORIES.join(" | ")}.
+9. Extraia prazo, pagamento, validade e contato. O campo "description" resume o escopo; "service" é o objeto curto.
+10. Em "analysis", compare mão de obra e materiais quando discriminados, cobertura, valor global e condições. Informe diferenças de escopo e valores não discriminados. Não recomende uma proposta parcial como se cobrisse tudo.
+11. Responda exclusivamente com JSON válido, sem markdown. Não invente valores ausentes.
+12. Use a data de análise ${todayISO()} no formato AAAA-MM-DD.
 
 Contexto adicional informado pelo usuário:
 - Condomínio: ${hints.condominium || "não informado"}
@@ -154,11 +150,11 @@ const RAW_SCHEMA = {
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["description", "nature"],
+        required: ["description"],
         properties: {
           description: { type: "string" },
+          costType: { type: "string", enum: ["mao_obra", "material", "nao_discriminado"] },
           unit: { type: "string" },
-          nature: { type: "string", enum: ["material", "mao_de_obra", "outros"] },
           quantity: { type: ["number", "null"] },
           prices: { type: "array", items: { type: ["number", "null"] } },
         },
@@ -186,6 +182,7 @@ async function callOpenAI(
   files: UploadInput[],
   text: string,
   hints: ExtractionHints,
+  signal?: AbortSignal,
 ): Promise<RawExtraction> {
   const content: Record<string, unknown>[] = [{ type: "input_text", text: buildPrompt(hints) }];
   if (text.trim()) {
@@ -212,7 +209,9 @@ async function callOpenAI(
         format: { type: "json_schema", name: "mapa_cotacao", schema: RAW_SCHEMA, strict: false },
       },
     }),
-    signal: AbortSignal.timeout(120_000),
+    signal: signal
+      ? AbortSignal.any([signal, AbortSignal.timeout(210_000)])
+      : AbortSignal.timeout(210_000),
   });
 
   if (!response.ok) {
@@ -240,7 +239,9 @@ async function callGemini(
   files: UploadInput[],
   text: string,
   hints: ExtractionHints,
-): Promise<RawExtraction> {
+  signal?: AbortSignal,
+  onPhase?: (phase: AiAnalysisPhase) => void,
+): Promise<{ raw: RawExtraction; model: string; usedAlternative: boolean; switchedModel: boolean }> {
   const input: GeminiInputPart[] = [{ type: "text", text: buildPrompt(hints) }];
   if (text.trim()) {
     input.push({ type: "text", text: `Texto da cotação (extraído):\n${text.slice(0, MAX_CHARS)}` });
@@ -254,30 +255,27 @@ async function callGemini(
     });
   }
 
-  const outputText = await createGeminiInteraction({
+  const result = await createGeminiInteractionDetailed({
     model,
     apiKey,
     input,
     responseSchema: RAW_SCHEMA,
-    // Extração estruturada não precisa de raciocínio longo: "low" reduz bastante a latência.
-    generationConfig: { thinking_level: "low", max_output_tokens: 32768 },
-    // Limite por tentativa: se um modelo travar, sobra tempo para tentar o próximo.
-    timeoutMs: 90_000,
+    signal,
+    onRetry: (phase) => onPhase?.(phase === "retrying" ? "tentando_novamente" : "alternativa"),
   });
-  return parseJsonLoose(outputText, "Gemini");
+  return { ...result, raw: parseJsonLoose(result.text, "Gemini") };
 }
 
 /** Testa a chave pela mesma API e modelo usados na leitura das cotações. */
 export async function testGeminiKey(apiKey: string): Promise<{ ok: true; model: string }> {
-  await createGeminiInteraction({
+  const result = await createGeminiInteractionDetailed({
     model: GEMINI_MODEL,
     apiKey,
     input: [{ type: "text", text: "Responda apenas com a palavra: OK" }],
-    // O limite inclui os tokens de raciocínio; valores muito baixos cortam a resposta.
-    generationConfig: { thinking_level: "low", max_output_tokens: 2048 },
-    timeoutMs: 60_000,
+    preferredTransport: "generateContent",
+    timeoutMs: 45_000,
   });
-  return { ok: true, model: GEMINI_MODEL };
+  return { ok: true, model: result.model };
 }
 
 function parseJsonLoose(raw: string, provider: string): RawExtraction {
@@ -306,8 +304,9 @@ function normalizeUnit(unit: string | undefined): string {
 }
 
 function mapRaw(raw: RawExtraction, hints: ExtractionHints, mode: AiExtractionResult["mode"]) {
-  const rawSuppliers = (raw.suppliers ?? []).filter((supplier) => (supplier?.name ?? "").trim().length > 0).slice(0, 5);
-  const suppliers: Supplier[] = rawSuppliers.map((supplier, index) => ({
+  const rawSuppliers = (raw.suppliers ?? []).map((supplier, originalIndex) => ({ supplier, originalIndex }))
+    .filter(({ supplier }) => (supplier?.name ?? "").trim().length > 0).slice(0, 5);
+  const suppliers: Supplier[] = rawSuppliers.map(({ supplier }, index) => ({
     id: `sup_${index}_${uid()}`,
     name: (supplier.name || `Fornecedor ${String.fromCharCode(65 + index)}`).trim().slice(0, 160),
     contact: (supplier.contact || "").trim().slice(0, 200),
@@ -333,25 +332,23 @@ function mapRaw(raw: RawExtraction, hints: ExtractionHints, mode: AiExtractionRe
   const items: QuoteItem[] = (raw.items ?? []).slice(0, 120).map((item, itemIndex) => {
     const prices: Record<string, number | null> = {};
     safeSuppliers.forEach((supplier, supplierIndex) => {
-      const rawPrice = Array.isArray(item.prices) ? item.prices[supplierIndex] : null;
+      const originalIndex = rawSuppliers[supplierIndex]?.originalIndex ?? supplierIndex;
+      const rawPrice = Array.isArray(item.prices) ? item.prices[originalIndex] : null;
       const parsed =
         typeof rawPrice === "number"
           ? rawPrice
           : typeof rawPrice === "string"
-            ? Number(rawPrice.replace(/\./g, "").replace(",", "."))
+            ? parseCurrencyInput(rawPrice)
             : null;
       prices[supplier.id] = parsed !== null && Number.isFinite(parsed) ? round2(parsed) : null;
     });
     const quantity = typeof item.quantity === "number" && Number.isFinite(item.quantity) ? item.quantity : 1;
-    const description = (item.description || `Item ${itemIndex + 1}`).trim().slice(0, 600);
-    const unit = normalizeUnit(item.unit);
     return {
       id: `itm_${itemIndex}_${uid()}`,
-      description,
-      unit,
+      description: (item.description || `Item ${itemIndex + 1}`).trim().slice(0, 600),
+      costType: item.costType === "mao_obra" || item.costType === "material" ? item.costType : "nao_discriminado",
+      unit: normalizeUnit(item.unit),
       quantity: quantity > 0 ? quantity : 1,
-      // A IA classifica; se vier vazio ou inválido, deduzimos pela descrição.
-      nature: normalizeNature(item.nature, description, unit),
       prices,
     };
   });
@@ -379,9 +376,9 @@ function mapRaw(raw: RawExtraction, hints: ExtractionHints, mode: AiExtractionRe
             {
               id: `itm_${uid()}`,
               description: "Fornecimento global conforme escopo apresentado",
+              costType: "nao_discriminado" as const,
               unit: "vb (verba)",
               quantity: 1,
-              nature: "outros" as const,
               prices: Object.fromEntries(safeSuppliers.map((supplier) => [supplier.id, null])),
             },
           ],
@@ -414,10 +411,14 @@ export async function extractQuotation({
   files,
   text,
   hints,
+  signal,
+  onPhase,
 }: {
   files: UploadInput[];
   text: string;
   hints: ExtractionHints;
+  signal?: AbortSignal;
+  onPhase?: (phase: AiAnalysisPhase) => void;
 }): Promise<AiExtractionResult> {
   const config = await getAiConfig();
   const warnings: string[] = [];
@@ -428,13 +429,22 @@ export async function extractQuotation({
 
   if (config.provider !== "none") {
     try {
-      const raw =
-        config.provider === "openai" && config.openaiKey
-          ? await callOpenAI(config.model, config.openaiKey, files, text, hints)
-          : config.geminiKey
-            ? await callGemini(config.model, config.geminiKey, files, text, hints)
-            : null;
-      if (!raw) throw new Error("Chave de IA indisponível.");
+      let raw: RawExtraction;
+      let usedModel = config.model;
+      if (config.provider === "openai" && config.openaiKey) {
+        raw = await callOpenAI(config.model, config.openaiKey, files, text, hints, signal);
+      } else if (config.geminiKey) {
+        const result = await callGemini(config.model, config.geminiKey, files, text, hints, signal, onPhase);
+        raw = result.raw;
+        usedModel = result.model;
+        if (result.switchedModel) {
+          warnings.push(`O modelo principal estava indisponível; a análise usou ${result.model}, também do Google. Revise os dados extraídos antes de salvar.`);
+        } else if (result.usedAlternative) {
+          warnings.push("A análise foi concluída após uma nova tentativa de conexão com o Google. Revise os dados antes de salvar.");
+        }
+      } else {
+        throw new Error("Chave de IA indisponível.");
+      }
       const mapped = mapRaw(raw, hints, "ia");
       if (!mapped.analysis.summary) {
         warnings.push("A IA não retornou parecer textual; a análise será gerada automaticamente pelos valores.");
@@ -442,18 +452,20 @@ export async function extractQuotation({
       return {
         draft: mapped,
         mode: "ia",
-        provider:
-          config.provider === "openai"
-            ? `OpenAI · ${config.model}`
-            : `Google Gemini · ${config.model}`,
+        provider: config.provider === "openai" ? `OpenAI · ${usedModel}` : `Google Gemini · ${usedModel}`,
         warnings,
         fileSummaries,
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : "Erro desconhecido na análise de IA.";
       warnings.push(message);
-      if (!text.trim()) throw new Error(message);
+      // Não apresentar texto local como se os PDFs tivessem sido lidos pela IA.
+      if (signal?.aborted || files.length > 0 || !text.trim()) throw new Error(message);
     }
+  }
+
+  if (files.length > 0 && config.provider === "none") {
+    throw new Error(NO_AI_MESSAGE);
   }
 
   if (text.trim()) {

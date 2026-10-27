@@ -6,40 +6,34 @@ import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import type {
   AiExtractionResult,
-  ItemNature,
+  CostType,
   QuotationDraft,
   QuotationStatus,
   QuoteItem,
   Supplier,
 } from "@/lib/types";
-import {
-  CATEGORIES,
-  MAX_SUPPLIERS,
-  NATURE_LABEL,
-  NATURE_STYLE,
-  NATURE_VALUES,
-  STATUS_LABEL,
-  STATUS_STYLE,
-  UNITS,
-} from "@/lib/constants";
+import { CATEGORIES, COST_TYPE_LABEL, COST_TYPES, MAX_SUPPLIERS, STATUS_LABEL, STATUS_STYLE, UNITS } from "@/lib/constants";
 import {
   buildNarrative,
   computeMetrics,
-  inferNature,
   createItem,
   createSupplier,
   formatBytes,
   formatCurrency,
   formatDateLong,
   parseCurrencyInput,
+  recordedSavings,
+  supplierCostBreakdown,
   todayISO,
 } from "@/lib/quotation";
 import { mergeExtraction } from "@/lib/extraction";
+import { downloadPdf } from "@/lib/client-download";
 import { MapDocument } from "./MapDocument";
 import { AiImportPanel, type AiFileMeta } from "./AiImportPanel";
 import {
   ArrowLeftIcon,
   ArrowRightIcon,
+  DownloadIcon,
   BuildingIcon,
   CheckIcon,
   CloseIcon,
@@ -68,51 +62,13 @@ export function QuotationEditor({ initial, quotationId, protocol: initialProtoco
   const [protocol, setProtocol] = useState(initialProtocol ?? "MC-••••-••••");
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [downloadingPdf, setDownloadingPdf] = useState(false);
   const [feedback, setFeedback] = useState<Feedback>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [aiOpen, setAiOpen] = useState(!quotationId);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  // Itens cuja natureza foi escolhida à mão: não sobrescrevemos a escolha.
-  const [naturePinned, setNaturePinned] = useState<Set<string>>(() => new Set());
-  // Enquanto o parecer não for editado manualmente, ele acompanha os valores.
-  const [analysisTouched, setAnalysisTouched] = useState(
-    () => Boolean(initial.analysis.summary.trim() || initial.analysis.recommendation.trim()),
-  );
 
   const metrics = useMemo(() => computeMetrics(draft), [draft]);
-
-  // Assinatura dos dados que influenciam o parecer automático.
-  const analysisKey = useMemo(
-    () =>
-      JSON.stringify({
-        service: draft.service,
-        kind: draft.kind,
-        condominium: draft.condominium,
-        suppliers: draft.suppliers.map((supplier) => [supplier.id, supplier.name]),
-        items: draft.items.map((item) => [item.nature, item.quantity, item.prices]),
-      }),
-    [draft],
-  );
-
-  // Mantém "Resumo do comparativo" e a recomendação sempre em dia com as propostas.
-  useEffect(() => {
-    if (analysisTouched) return;
-    const narrative = buildNarrative(draft);
-    setDraft((current) => {
-      if (
-        current.analysis.summary === narrative.summary &&
-        current.analysis.recommendation === narrative.recommendation
-      ) {
-        return current;
-      }
-      return {
-        ...current,
-        analysis: { ...current.analysis, summary: narrative.summary, recommendation: narrative.recommendation },
-      };
-    });
-    // Recalcula apenas quando os números ou o escopo mudam.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [analysisKey, analysisTouched]);
 
   useEffect(() => {
     if (!dirty) return;
@@ -171,9 +127,6 @@ export function QuotationEditor({ initial, quotationId, protocol: initialProtoco
   }
 
   function updateItem(itemId: string, patch: Partial<QuoteItem>) {
-    if (patch.nature !== undefined) {
-      setNaturePinned((current) => new Set(current).add(itemId));
-    }
     setDraft((current) => ({
       ...current,
       items: current.items.map((item) => (item.id === itemId ? { ...item, ...patch } : item)),
@@ -206,13 +159,13 @@ export function QuotationEditor({ initial, quotationId, protocol: initialProtoco
   }
 
   function regenerateAnalysis() {
-    setAnalysisTouched(false);
     const narrative = buildNarrative(draft);
     setDraft((current) => ({
       ...current,
       analysis: {
         ...narrative,
         notes: current.analysis.notes || narrative.notes,
+        outcome: current.analysis.outcome,
       },
     }));
     setDirty(true);
@@ -220,8 +173,6 @@ export function QuotationEditor({ initial, quotationId, protocol: initialProtoco
   }
 
   function applyExtraction(result: AiExtractionResult, files: AiFileMeta[]) {
-    setNaturePinned(new Set());
-    setAnalysisTouched(true);
     setDraft((current) => mergeExtraction(current, result, files));
     setDirty(true);
     setFeedback({
@@ -276,6 +227,20 @@ export function QuotationEditor({ initial, quotationId, protocol: initialProtoco
     window.open(`/mapas/${targetId}/imprimir`, "_blank", "noopener,noreferrer");
   }
 
+  async function handleDownloadPdf() {
+    const targetId = dirty || !id ? await persist() : id;
+    if (!targetId) return;
+    setDownloadingPdf(true);
+    try {
+      const fileName = await downloadPdf(`/api/quotations/${targetId}/pdf`, "mapa-cotacao.pdf");
+      setFeedback({ tone: "ok", message: `PDF baixado: ${fileName}` });
+    } catch (error) {
+      setFeedback({ tone: "error", message: error instanceof Error ? error.message : "Não foi possível baixar o PDF." });
+    } finally {
+      setDownloadingPdf(false);
+    }
+  }
+
   async function handleDelete() {
     if (!id) {
       router.push("/");
@@ -303,6 +268,14 @@ export function QuotationEditor({ initial, quotationId, protocol: initialProtoco
 
   const best = metrics.best;
   const maxTotal = Math.max(...metrics.rankings.map((row) => row.total ?? 0), 1);
+  const outcome = draft.analysis.outcome ?? { supplierId: "", referenceAmount: null, contractedAmount: null, confirmed: false };
+  const confirmedSavings = recordedSavings(draft);
+  const awardedRanking = metrics.rankings.find((row) => row.supplier.id === outcome.supplierId);
+
+  function updateOutcome(patch: Partial<typeof outcome>) {
+    const changesValues = patch.supplierId !== undefined || patch.referenceAmount !== undefined || patch.contractedAmount !== undefined;
+    update({ analysis: { ...draft.analysis, outcome: { ...outcome, ...patch, confirmed: changesValues ? false : (patch.confirmed ?? outcome.confirmed) } } });
+  }
 
   return (
     <div className="print:hidden">
@@ -344,11 +317,15 @@ export function QuotationEditor({ initial, quotationId, protocol: initialProtoco
               <FileIcon className="h-4 w-4" />
               <span className="hidden sm:inline">Ver documento</span>
             </button>
-            <button type="button" onClick={handlePrint} className="btn btn-ghost" disabled={saving}>
+            <button type="button" onClick={handlePrint} className="btn btn-ghost" disabled={saving || downloadingPdf}>
               <PrinterIcon className="h-4 w-4" />
-              <span className="hidden sm:inline">Imprimir / PDF</span>
+              <span className="hidden sm:inline">Imprimir</span>
             </button>
-            <button type="button" onClick={() => persist()} className="btn btn-primary" disabled={saving}>
+            <button type="button" onClick={handleDownloadPdf} className="btn btn-brand" disabled={saving || downloadingPdf}>
+              <DownloadIcon className="h-4 w-4" />
+              {downloadingPdf ? "Gerando PDF…" : "Baixar PDF"}
+            </button>
+            <button type="button" onClick={() => persist()} className="btn btn-primary" disabled={saving || downloadingPdf}>
               <SaveIcon className="h-4 w-4" />
               {saving ? "Salvando…" : "Salvar"}
             </button>
@@ -522,6 +499,7 @@ export function QuotationEditor({ initial, quotationId, protocol: initialProtoco
               <div className="mt-3 space-y-3">
                 {draft.suppliers.map((supplier, index) => {
                   const ranking = metrics.rankings.find((row) => row.supplier.id === supplier.id);
+                  const breakdown = supplierCostBreakdown(draft.items, supplier.id);
                   return (
                     <div
                       key={supplier.id}
@@ -609,6 +587,11 @@ export function QuotationEditor({ initial, quotationId, protocol: initialProtoco
                           onChange={(event) => updateSupplier(supplier.id, { notes: event.target.value })}
                         />
                       </label>
+                      <div className="mt-2 grid grid-cols-3 gap-2 rounded-lg bg-paper/70 px-3 py-2 text-[10.5px]">
+                        <div><span className="block text-slate-500">Mão de obra</span><strong className="text-ink">{formatCurrency(breakdown.mao_obra.total)}</strong></div>
+                        <div><span className="block text-slate-500">Material</span><strong className="text-ink">{formatCurrency(breakdown.material.total)}</strong></div>
+                        <div><span className="block text-slate-500">Não discriminado</span><strong className="text-ink">{formatCurrency(breakdown.nao_discriminado.total)}</strong></div>
+                      </div>
                     </div>
                   );
                 })}
@@ -620,7 +603,7 @@ export function QuotationEditor({ initial, quotationId, protocol: initialProtoco
               <SectionHeading
                 number="3"
                 title={draft.kind === "produtos" ? "Produtos e valores" : "Itens, serviços e valores"}
-                subtitle="Informe o valor unitário de cada fornecedor. O menor preço é destacado automaticamente."
+                subtitle="Classifique cada item como mão de obra, material ou não discriminado e informe os preços unitários."
                 right={
                   <button type="button" onClick={addItem} className="btn btn-ghost">
                     <PlusIcon className="h-3.5 w-3.5" />
@@ -640,9 +623,6 @@ export function QuotationEditor({ initial, quotationId, protocol: initialProtoco
                       </th>
                       <th className="w-[92px] bg-paper px-1.5 py-2 text-left text-[9.5px] font-extrabold uppercase tracking-[0.1em] text-slate-500">
                         Un.
-                      </th>
-                      <th className="w-[108px] bg-paper px-1.5 py-2 text-left text-[9.5px] font-extrabold uppercase tracking-[0.1em] text-slate-500">
-                        Natureza
                       </th>
                       {draft.suppliers.map((supplier, index) => (
                         <th key={supplier.id} className="w-[104px] bg-paper px-1.5 py-2 text-right text-[9.5px] font-extrabold uppercase tracking-[0.1em] text-slate-500">
@@ -668,21 +648,23 @@ export function QuotationEditor({ initial, quotationId, protocol: initialProtoco
                               <span className="mt-2 text-[9.5px] font-bold text-slate-400">
                                 {String(itemIndex + 1).padStart(2, "0")}
                               </span>
-                              <textarea
-                                className="field resize-none !py-1.5 text-[12px]"
-                                rows={2}
-                                placeholder="Descrição do item, material ou serviço"
-                                value={item.description}
-                                onChange={(event) =>
-                                  updateItem(item.id, {
-                                    description: event.target.value,
-                                    // Sugere a natureza enquanto o usuário ainda não escolheu manualmente.
-                                    ...(naturePinned.has(item.id)
-                                      ? {}
-                                      : { nature: inferNature(event.target.value, item.unit) }),
-                                  })
-                                }
-                              />
+                              <div className="min-w-0 flex-1">
+                                <textarea
+                                  className="field resize-none !py-1.5 text-[12px]"
+                                  rows={2}
+                                  placeholder="Descrição do item, material ou serviço"
+                                  value={item.description}
+                                  onChange={(event) => updateItem(item.id, { description: event.target.value })}
+                                />
+                                <select
+                                  className="mt-1 w-full rounded-md border border-line bg-white px-2 py-1 text-[10.5px] font-semibold text-slate-600 outline-none focus:border-brand"
+                                  aria-label={`Tipo de custo do item ${itemIndex + 1}`}
+                                  value={item.costType ?? "nao_discriminado"}
+                                  onChange={(event) => updateItem(item.id, { costType: event.target.value as CostType })}
+                                >
+                                  {COST_TYPES.map((type) => <option key={type} value={type}>{COST_TYPE_LABEL[type]}</option>)}
+                                </select>
+                              </div>
                             </div>
                           </td>
                           <td className="border-b border-line px-1.5 py-1.5">
@@ -704,22 +686,6 @@ export function QuotationEditor({ initial, quotationId, protocol: initialProtoco
                               {UNITS.map((unit) => (
                                 <option key={unit} value={unit}>
                                   {unit}
-                                </option>
-                              ))}
-                            </select>
-                          </td>
-                          <td className="border-b border-line px-1.5 py-1.5">
-                            <select
-                              className={`field !py-1.5 text-[11.5px] font-semibold ${NATURE_STYLE[item.nature]}`}
-                              value={item.nature}
-                              aria-label={`Natureza do item ${itemIndex + 1}`}
-                              onChange={(event) =>
-                                updateItem(item.id, { nature: event.target.value as ItemNature })
-                              }
-                            >
-                              {NATURE_VALUES.map((nature) => (
-                                <option key={nature} value={nature}>
-                                  {NATURE_LABEL[nature]}
                                 </option>
                               ))}
                             </select>
@@ -752,7 +718,7 @@ export function QuotationEditor({ initial, quotationId, protocol: initialProtoco
                       );
                     })}
                     <tr>
-                      <td colSpan={4} className="bg-paper px-2 py-2 text-right text-[10px] font-extrabold uppercase tracking-[0.1em] text-slate-500">
+                      <td colSpan={3} className="bg-paper px-2 py-2 text-right text-[10px] font-extrabold uppercase tracking-[0.1em] text-slate-500">
                         Total por fornecedor
                       </td>
                       {draft.suppliers.map((supplier) => {
@@ -774,7 +740,7 @@ export function QuotationEditor({ initial, quotationId, protocol: initialProtoco
                 </table>
               </div>
               <p className="mt-2 text-[10.5px] text-slate-500">
-                Totais calculados por quantidade × valor unitário. Itens sem preço não entram no total do fornecedor.
+                Totais calculados por quantidade × valor unitário. Itens sem preço não entram no total; melhor proposta e economia consideram apenas fornecedores com todos os itens cotados.
               </p>
             </section>
 
@@ -800,10 +766,7 @@ export function QuotationEditor({ initial, quotationId, protocol: initialProtoco
                       rows={5}
                       placeholder="Resumo das propostas analisadas, cobertura e diferenças de valor."
                       value={draft.analysis.summary}
-                      onChange={(event) => {
-                        setAnalysisTouched(true);
-                        update({ analysis: { ...draft.analysis, summary: event.target.value } });
-                      }}
+                      onChange={(event) => update({ analysis: { ...draft.analysis, summary: event.target.value } })}
                     />
                   </label>
                   <label className="block">
@@ -813,10 +776,9 @@ export function QuotationEditor({ initial, quotationId, protocol: initialProtoco
                       rows={3}
                       placeholder="Fornecedor recomendado e condicionantes."
                       value={draft.analysis.recommendation}
-                      onChange={(event) => {
-                        setAnalysisTouched(true);
-                        update({ analysis: { ...draft.analysis, recommendation: event.target.value } });
-                      }}
+                      onChange={(event) =>
+                        update({ analysis: { ...draft.analysis, recommendation: event.target.value } })
+                      }
                     />
                   </label>
                   <label className="block">
@@ -863,10 +825,21 @@ export function QuotationEditor({ initial, quotationId, protocol: initialProtoco
               </div>
             </section>
 
+            <section className="card px-4 py-4 sm:px-5">
+              <SectionHeading number="5" title="Resultado da contratação" subtitle="Registre a referência e o valor aprovado para acompanhar a economia confirmada no dashboard." />
+              <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                <label className="sm:col-span-3"><span className="label">Fornecedor contratado</span><select className="field mt-1" value={outcome.supplierId} onChange={(event) => updateOutcome({ supplierId: event.target.value, contractedAmount: null })}><option value="">Selecione quando houver contratação</option>{draft.suppliers.map((supplier) => <option key={supplier.id} value={supplier.id}>{supplier.name || "Fornecedor sem nome"}</option>)}</select></label>
+                <div><span className="label">Valor de referência</span><div className="mt-1"><MoneyInput value={outcome.referenceAmount} onChange={(value) => updateOutcome({ referenceAmount: value })} /></div><button type="button" disabled={metrics.highest?.total == null} onClick={() => updateOutcome({ referenceAmount: metrics.highest?.total ?? null })} className="mt-1 text-[10px] font-bold text-brand-dark underline disabled:opacity-40">Usar maior proposta completa</button></div>
+                <div><span className="label">Valor contratado</span><div className="mt-1"><MoneyInput value={outcome.contractedAmount} onChange={(value) => updateOutcome({ contractedAmount: value })} /></div><button type="button" disabled={!awardedRanking || awardedRanking.coverage !== draft.items.length || awardedRanking.total === null} onClick={() => updateOutcome({ contractedAmount: awardedRanking?.total ?? null })} className="mt-1 text-[10px] font-bold text-brand-dark underline disabled:opacity-40">Usar total do fornecedor</button></div>
+                <div className="rounded-lg border border-line bg-paper px-3 py-2"><span className="label">Diferença confirmada</span><p className={`mt-1 text-[15px] font-extrabold ${confirmedSavings !== null && confirmedSavings < 0 ? "text-red-700" : "text-success"}`}>{formatCurrency(confirmedSavings)}</p><p className="text-[10px] text-slate-500">{confirmedSavings !== null && confirmedSavings < 0 ? "Acima da referência" : "Referência − contratado"}</p></div>
+                <label className="flex items-start gap-2 sm:col-span-3"><input type="checkbox" className="mt-0.5 h-4 w-4 accent-[#181447]" checked={outcome.confirmed} onChange={(event) => updateOutcome({ confirmed: event.target.checked })} /><span className="text-[11.5px] leading-relaxed text-slate-600">Confirmo os valores da contratação. Para entrar no indicador confirmado, informe os dois valores, selecione o fornecedor e marque o mapa como <strong>Concluído</strong>.</span></label>
+              </div>
+            </section>
+
             {/* Anexos */}
             <section className="card px-4 py-4 sm:px-5">
               <SectionHeading
-                number="5"
+                number="6"
                 title="Anexos do processo"
                 subtitle="Documentos que embasaram o mapa, para rastreabilidade da decisão."
               />
@@ -909,63 +882,32 @@ export function QuotationEditor({ initial, quotationId, protocol: initialProtoco
               <div className="bg-ink px-4 py-3 text-white">
                 <p className="text-[9px] font-bold uppercase tracking-[0.18em] text-white/60">Resumo do comparativo</p>
                 <p className="font-display mt-0.5 text-[19px] leading-tight">
-                  {best?.supplier.name || "Aguardando propostas"}
+                  {best?.supplier.name || (metrics.rankings.some((row) => row.total !== null) ? "Propostas parciais" : "Aguardando valores")}
                 </p>
                 <p className="mt-1 text-[22px] font-extrabold leading-none">{formatCurrency(best?.total ?? null)}</p>
+                <p className="mt-1 text-[10px] text-white/60">{best ? "Menor proposta com cobertura completa" : "Os valores informados aparecem abaixo"}</p>
               </div>
               <div className="grid grid-cols-2 divide-x divide-line border-b border-line">
                 <div className="px-3 py-2.5">
                   <p className="label !text-[8px]">Economia</p>
-                  <p className="text-[13px] font-extrabold text-success">{formatCurrency(metrics.savings)}</p>
+                  <p className="text-[13px] font-extrabold text-success">{metrics.isComparable ? formatCurrency(metrics.savings) : "—"}</p>
                 </div>
                 <div className="px-3 py-2.5">
                   <p className="label !text-[8px]">Redução</p>
                   <p className="text-[13px] font-extrabold text-success">
-                    {metrics.savings > 0 ? `${metrics.savingsPercent.toFixed(1)}%` : "—"}
+                    {metrics.isComparable ? `${metrics.savingsPercent.toFixed(1)}%` : "—"}
                   </p>
                 </div>
               </div>
               <div className="border-b border-line px-4 py-3">
-                <p className="label !text-[8px]">Composição da melhor proposta</p>
-                {metrics.best ? (
-                  <>
-                    <div className="mt-1.5 flex h-2 overflow-hidden rounded-full bg-paper">
-                      {(() => {
-                        const { material, mao_de_obra: labor, outros } = metrics.bestByNature;
-                        const total = material + labor + outros;
-                        if (total <= 0) return <div className="h-full w-full bg-line" />;
-                        return (
-                          <>
-                            <div className="h-full bg-sky-500" style={{ width: `${(material / total) * 100}%` }} />
-                            <div className="h-full bg-violet-500" style={{ width: `${(labor / total) * 100}%` }} />
-                            <div className="h-full bg-slate-400" style={{ width: `${(outros / total) * 100}%` }} />
-                          </>
-                        );
-                      })()}
-                    </div>
-                    <dl className="mt-2 space-y-1">
-                      {([
-                        ["material", "bg-sky-500"],
-                        ["mao_de_obra", "bg-violet-500"],
-                        ["outros", "bg-slate-400"],
-                      ] as const).map(([nature, color]) => (
-                        <div key={nature} className="flex items-center justify-between gap-2 text-[11px]">
-                          <dt className="flex items-center gap-1.5 text-slate-600">
-                            <span className={`h-2 w-2 rounded-full ${color}`} />
-                            {NATURE_LABEL[nature]}
-                          </dt>
-                          <dd className="font-bold tabular-nums text-ink">
-                            {formatCurrency(metrics.bestByNature[nature])}
-                          </dd>
-                        </div>
-                      ))}
-                    </dl>
-                  </>
-                ) : (
-                  <p className="mt-1 text-[11px] leading-snug text-slate-500">
-                    Informe os preços para ver quanto é material e quanto é mão de obra.
-                  </p>
-                )}
+                <div className="flex items-center justify-between"><p className="label !text-[8px]">Valores por fornecedor</p><span className="text-[9px] text-slate-400">Atualização imediata</span></div>
+                <div className="mt-2 space-y-2.5">
+                  {metrics.rankings.map((row) => {
+                    const breakdown = supplierCostBreakdown(draft.items, row.supplier.id);
+                    return <div key={row.supplier.id} className="rounded-lg bg-paper/70 px-2.5 py-2"><div className="flex justify-between gap-2 text-[10.5px]"><span className="truncate font-bold text-ink">{row.supplier.name || "Fornecedor"}</span><strong className={row.isBest ? "text-success" : "text-ink"}>{formatCurrency(row.total)}</strong></div><p className="mt-0.5 text-[9.5px] text-slate-500">{row.coverage}/{metrics.itemCount} itens cotados{row.total !== null && row.coverage < metrics.itemCount ? " · total parcial" : ""}</p>{row.total !== null && <p className="mt-1 text-[9.5px] leading-relaxed text-slate-500">Mão de obra: {formatCurrency(breakdown.mao_obra.total)} · Material: {formatCurrency(breakdown.material.total)} · Não discriminado: {formatCurrency(breakdown.nao_discriminado.total)}</p>}</div>;
+                  })}
+                </div>
+                {!metrics.isComparable && <p className="mt-2 text-[9.5px] leading-relaxed text-slate-500">A economia potencial requer pelo menos duas propostas com todos os itens preenchidos.</p>}
               </div>
               <div className="px-4 py-3">
                 <p className="label !text-[8px]">Pendências para concluir</p>
@@ -995,9 +937,13 @@ export function QuotationEditor({ initial, quotationId, protocol: initialProtoco
                   <FileIcon className="h-4 w-4" />
                   Pré-visualizar documento
                 </button>
-                <button type="button" onClick={handlePrint} className="btn btn-brand w-full !justify-start" disabled={saving}>
+                <button type="button" onClick={handleDownloadPdf} className="btn btn-brand w-full !justify-start" disabled={saving || downloadingPdf}>
+                  <DownloadIcon className="h-4 w-4" />
+                  {downloadingPdf ? "Gerando PDF…" : "Baixar PDF do mapa"}
+                </button>
+                <button type="button" onClick={handlePrint} className="btn btn-ghost w-full !justify-start" disabled={saving || downloadingPdf}>
                   <PrinterIcon className="h-4 w-4" />
-                  Imprimir / salvar em PDF
+                  Pré-visualizar impressão
                 </button>
                 <button
                   type="button"

@@ -223,6 +223,11 @@ export default async function HomePage() {
           </div>
         )}
 
+        <Link href="/indicadores" className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-brand/30 bg-white px-4 py-3 transition hover:border-brand hover:bg-brand-soft/30">
+          <span className="flex items-center gap-3"><span className="grid h-9 w-9 place-items-center rounded-lg bg-ink text-brand"><TrendIcon className="h-4.5 w-4.5" /></span><span><strong className="block text-[12.5px] text-ink">Dashboard para assembleia</strong><span className="block text-[11px] text-slate-500">Acompanhe economias, propostas e resultados por condomínio.</span></span></span>
+          <span className="inline-flex items-center gap-1 text-[11px] font-bold text-brand-dark">Abrir indicadores <ArrowRightIcon className="h-3.5 w-3.5" /></span>
+        </Link>
+
         <section className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <StatCard
             icon={<FileIcon className="h-4 w-4" />}
@@ -230,23 +235,19 @@ export default async function HomePage() {
             value={String(records.length)}
             hint={`${completed} concluído(s) · ${inAnalysis} em análise`}
           />
-          <Link href="/dashboard" className="transition hover:-translate-y-0.5">
-            <StatCard
-              icon={<TrendIcon className="h-4 w-4" />}
-              label="Economia apurada"
-              value={formatCompactCurrency(totalSavings)}
-              hint="Clique para ver os indicadores da assembleia"
-              tone="gold"
-            />
-          </Link>
-          <Link href="/condominios" className="transition hover:-translate-y-0.5">
-            <StatCard
-              icon={<BuildingIcon className="h-4 w-4" />}
-              label="Condomínios atendidos"
-              value={String(condominiums.length)}
-              hint="Clique para cadastrar ou editar os condomínios"
-            />
-          </Link>
+          <StatCard
+            icon={<TrendIcon className="h-4 w-4" />}
+            label="Economia potencial"
+            value={formatCompactCurrency(totalSavings)}
+            hint="Diferença entre propostas completas, não lucro"
+            tone="gold"
+          />
+          <StatCard
+            icon={<BuildingIcon className="h-4 w-4" />}
+            label="Condomínios atendidos"
+            value={String(condominiums.length)}
+            hint="Associações e condomínios com processo ativo"
+          />
           <StatCard
             icon={<SparklesIcon className="h-4 w-4" />}
             label="Leitura com IA"
@@ -306,7 +307,7 @@ export default async function HomePage() {
             <section className="card" id="condominios">
               <div className="flex items-center justify-between gap-2 border-b border-line px-4 py-3">
                 <div>
-                  <h2 className="text-[13.5px] font-extrabold text-ink">Condomínios atendidos</h2>
+                  <Link href="/condominios" className="text-[13.5px] font-extrabold text-ink hover:underline">Condomínios atendidos</Link>
                   <p className="text-[10.5px] text-slate-500">Base da governança Gerencial</p>
                 </div>
                 <BuildingIcon className="h-4 w-4 text-slate-400" />
@@ -318,31 +319,23 @@ export default async function HomePage() {
                   </li>
                 )}
                 {condominiums.map((condominium) => (
-                  <li key={condominium.id}>
-                    <Link
-                      href="/condominios"
-                      className="flex items-center justify-between gap-2 px-4 py-2.5 transition hover:bg-brand-soft/40"
-                    >
-                      <div className="min-w-0">
-                        <p className="truncate text-[12px] font-bold text-ink">{condominium.name}</p>
-                        <p className="truncate text-[10px] text-slate-500">
-                          {condominium.city ?? "Cidade não informada"}
-                          {condominium.manager ? ` · ${condominium.manager}` : ""}
-                        </p>
-                      </div>
-                      <span className="shrink-0 rounded-full bg-paper px-2 py-0.5 text-[10px] font-bold text-slate-500">
-                        {condominiumCounts.get(condominium.name) ?? 0} mapa(s)
-                      </span>
-                    </Link>
+                  <li key={condominium.id} className="flex items-center justify-between gap-2 px-4 py-2.5">
+                    <div className="min-w-0">
+                      <Link href={`/condominios?editar=${condominium.id}`} className="block truncate text-[12px] font-bold text-ink hover:text-brand-dark hover:underline" title="Abrir cadastro para editar">{condominium.name}</Link>
+                      <p className="truncate text-[10px] text-slate-500">
+                        {condominium.city ?? "Cidade não informada"}
+                        {condominium.manager ? ` · ${condominium.manager}` : ""}
+                      </p>
+                    </div>
+                    <span className="shrink-0 rounded-full bg-paper px-2 py-0.5 text-[10px] font-bold text-slate-500">
+                      {condominiumCounts.get(condominium.name) ?? 0} mapa(s)
+                    </span>
                   </li>
                 ))}
               </ul>
-              <div className="flex items-center justify-between gap-2 border-t border-line px-4 py-2.5">
+              <div className="border-t border-line px-4 py-2.5">
                 <Link href="/condominios" className="text-[11px] font-bold text-brand-dark hover:underline">
-                  Gerenciar condomínios →
-                </Link>
-                <Link href="/dashboard" className="text-[11px] font-bold text-slate-500 hover:text-ink hover:underline">
-                  Indicadores
+                  Gerenciar condomínios e associações →
                 </Link>
               </div>
             </section>
