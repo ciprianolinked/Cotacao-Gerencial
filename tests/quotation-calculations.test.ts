@@ -42,6 +42,44 @@ test("uma única proposta completa não gera recomendação de contratação", (
   assert.match(narrative.recommendation, /ao menos duas propostas completas/i);
 });
 
+test("economia por natureza usa apenas partes informadas nas duas propostas", () => {
+  const items: QuoteItem[] = [
+    { ...item("1", 1, { a: 900, b: 1000 }), costType: "mao_obra" },
+    { ...item("2", 1, { a: 300, b: 320 }), costType: "material" },
+    { ...item("3", 1, { a: 100, b: 60 }), costType: "nao_discriminado" },
+  ];
+  // c tem total parcial, então não entra na comparação.
+  const metrics = computeMetrics({ items, suppliers });
+  assert.equal(metrics.best?.supplier.id, "a");
+  assert.equal(metrics.highest?.supplier.id, "b");
+  assert.equal(metrics.savings, 80);
+  assert.equal(metrics.savingsByNature.mao_de_obra, 100);
+  assert.equal(metrics.savingsByNature.material, 20);
+  // Nessa parte a melhor proposta global era mais cara: a diferença é negativa.
+  assert.equal(metrics.savingsByNature.outros, -40);
+});
+
+test("natureza não comparada fica em zero em vez de gerar estimativa", () => {
+  const items: QuoteItem[] = [
+    { ...item("1", 1, { a: 900, b: 1000 }), costType: "mao_obra" },
+    { ...item("2", 1, { a: 300, b: 320 }), costType: "material" },
+    { ...item("3", 1, { a: 100, b: null }), costType: "nao_discriminado" },
+  ];
+  // b não cotou o item 3, então não é proposta completa: sem comparativo global.
+  const metrics = computeMetrics({ items, suppliers });
+  assert.equal(metrics.highest, null);
+  assert.equal(metrics.isComparable, false);
+  assert.deepEqual(metrics.savingsByNature, { material: 0, mao_de_obra: 0, outros: 0 });
+});
+
+test("economia por natureza é zero quando há uma única proposta completa", () => {
+  const items = [item("1", 1, { a: 100, b: null }), item("2", 1, { a: 50, b: null })];
+  const metrics = computeMetrics({ items, suppliers });
+  assert.equal(metrics.best?.supplier.id, "a");
+  assert.equal(metrics.isComparable, false);
+  assert.deepEqual(metrics.savingsByNature, { material: 0, mao_de_obra: 0, outros: 0 });
+});
+
 test("separa mão de obra, material e valor global sem inventar divisão", () => {
   const items: QuoteItem[] = [
     { ...item("1", 2, { a: 100 }), costType: "mao_obra" },

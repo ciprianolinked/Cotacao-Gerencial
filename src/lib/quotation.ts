@@ -159,12 +159,21 @@ export function rankSuppliers(items: QuoteItem[], suppliers: Supplier[]): Suppli
   return rows;
 }
 
+/** Economia por natureza do custo, considerando apenas propostas completas. */
+export type NatureSavings = {
+  material: number;
+  mao_de_obra: number;
+  outros: number;
+};
+
 export type QuotationMetrics = {
   rankings: SupplierRanking[];
   best: SupplierRanking | null;
   highest: SupplierRanking | null;
   savings: number;
   savingsPercent: number;
+  /** Economia potencial separada por natureza do custo (0 quando não comparável). */
+  savingsByNature: NatureSavings;
   itemCount: number;
   supplierCount: number;
   isComparable: boolean;
@@ -181,12 +190,31 @@ export function computeMetrics(draft: Pick<QuotationDraft, "items" | "suppliers"
   const savings = best && highest ? round2((highest.total as number) - (best.total as number)) : 0;
   const savingsPercent =
     best && highest && (highest.total as number) > 0 ? (savings / (highest.total as number)) * 100 : 0;
+  // Só compara uma natureza quando as duas propostas completas informaram essa parte;
+  // caso contrário não há como apurar a diferença sem inventar valores.
+  const savingsByNature: NatureSavings = { material: 0, mao_de_obra: 0, outros: 0 };
+  if (best && highest) {
+    const bestBreakdown = supplierCostBreakdown(draft.items, best.supplier.id);
+    const highestBreakdown = supplierCostBreakdown(draft.items, highest.supplier.id);
+    for (const type of ["mao_obra", "material"] as const) {
+      const bestTotal = bestBreakdown[type].total;
+      const highestTotal = highestBreakdown[type].total;
+      if (bestTotal === null || highestTotal === null) continue;
+      savingsByNature[type === "material" ? "material" : "mao_de_obra"] = round2(highestTotal - bestTotal);
+    }
+    const bestOther = bestBreakdown.nao_discriminado.total;
+    const highestOther = highestBreakdown.nao_discriminado.total;
+    if (bestOther !== null && highestOther !== null) {
+      savingsByNature.outros = round2(highestOther - bestOther);
+    }
+  }
   return {
     rankings,
     best,
     highest,
     savings,
     savingsPercent,
+    savingsByNature,
     itemCount: draft.items.length,
     supplierCount: draft.suppliers.filter((supplier) => supplier.name.trim()).length,
     isComparable: priced.length > 1,
