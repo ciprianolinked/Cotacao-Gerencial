@@ -2,8 +2,7 @@ import { ACCEPTED_UPLOAD_TYPES, CATEGORIES, MAX_FILES, MAX_FILE_BYTES } from "./
 import type { AiExtractionResult, QuotationKind, QuoteItem, Supplier } from "./types";
 import { round2, todayISO, uid } from "./quotation";
 import { getGeminiKey } from "./server/quotations";
-import { createGeminiInteractionDetailed, resolveGeminiModel, type GeminiInputPart } from "./server/gemini";
-import type { AiAnalysisPhase } from "./ai-stream";
+import { createGeminiInteraction, resolveGeminiModel, type GeminiInputPart } from "./server/gemini";
 
 export type UploadInput = {
   name: string;
@@ -180,7 +179,6 @@ async function callOpenAI(
   files: UploadInput[],
   text: string,
   hints: ExtractionHints,
-  signal?: AbortSignal,
 ): Promise<RawExtraction> {
   const content: Record<string, unknown>[] = [{ type: "input_text", text: buildPrompt(hints) }];
   if (text.trim()) {
@@ -207,9 +205,7 @@ async function callOpenAI(
         format: { type: "json_schema", name: "mapa_cotacao", schema: RAW_SCHEMA, strict: false },
       },
     }),
-    signal: signal
-      ? AbortSignal.any([signal, AbortSignal.timeout(210_000)])
-      : AbortSignal.timeout(210_000),
+    signal: AbortSignal.timeout(120_000),
   });
 
   if (!response.ok) {
@@ -237,9 +233,7 @@ async function callGemini(
   files: UploadInput[],
   text: string,
   hints: ExtractionHints,
-  signal?: AbortSignal,
-  onPhase?: (phase: AiAnalysisPhase) => void,
-): Promise<{ raw: RawExtraction; model: string; usedAlternative: boolean; switchedModel: boolean }> {
+): Promise<RawExtraction> {
   const input: GeminiInputPart[] = [{ type: "text", text: buildPrompt(hints) }];
   if (text.trim()) {
     input.push({ type: "text", text: `Texto da cotação (extraído):\n${text.slice(0, MAX_CHARS)}` });
@@ -253,26 +247,30 @@ async function callGemini(
     });
   }
 
-  const result = await createGeminiInteractionDetailed({
+  const outputText = await createGeminiInteraction({
     model,
     apiKey,
     input,
     responseSchema: RAW_SCHEMA,
-    signal,
-    onRetry: (phase) => onPhase?.(phase === "retrying" ? "tentando_novamente" : "alternativa"),
+    // Extração estruturada não precisa de raciocínio longo: "low" reduz bastante a latência.
+    generationConfig: { thinking_level: "low", max_output_tokens: 32768 },
+    // Limite por tentativa: se um modelo travar, sobra tempo para tentar o próximo.
+    timeoutMs: 90_000,
   });
-  return { ...result, raw: parseJsonLoose(result.text, "Gemini") };
+  return parseJsonLoose(outputText, "Gemini");
 }
 
 /** Testa a chave pela mesma API e modelo usados na leitura das cotações. */
 export async function testGeminiKey(apiKey: string): Promise<{ ok: true; model: string }> {
-  const result = await createGeminiInteractionDetailed({
+  await createGeminiInteraction({
     model: GEMINI_MODEL,
     apiKey,
     input: [{ type: "text", text: "Responda apenas com a palavra: OK" }],
-    timeoutMs: 45_000,
+    // O limite inclui os tokens de raciocínio; valores muito baixos cortam a resposta.
+    generationConfig: { thinking_level: "low", max_output_tokens: 2048 },
+    timeoutMs: 60_000,
   });
-  return { ok: true, model: result.model };
+  return { ok: true, model: GEMINI_MODEL };
 }
 
 function parseJsonLoose(raw: string, provider: string): RawExtraction {
@@ -404,14 +402,10 @@ export async function extractQuotation({
   files,
   text,
   hints,
-  signal,
-  onPhase,
 }: {
   files: UploadInput[];
   text: string;
   hints: ExtractionHints;
-  signal?: AbortSignal;
-  onPhase?: (phase: AiAnalysisPhase) => void;
 }): Promise<AiExtractionResult> {
   const config = await getAiConfig();
   const warnings: string[] = [];
@@ -422,22 +416,13 @@ export async function extractQuotation({
 
   if (config.provider !== "none") {
     try {
-      let raw: RawExtraction;
-      let usedModel = config.model;
-      if (config.provider === "openai" && config.openaiKey) {
-        raw = await callOpenAI(config.model, config.openaiKey, files, text, hints, signal);
-      } else if (config.geminiKey) {
-        const result = await callGemini(config.model, config.geminiKey, files, text, hints, signal, onPhase);
-        raw = result.raw;
-        usedModel = result.model;
-        if (result.switchedModel) {
-          warnings.push(`O modelo principal estava indisponível; a análise usou ${result.model}, também do Google. Revise os dados extraídos antes de salvar.`);
-        } else if (result.usedAlternative) {
-          warnings.push("A análise foi concluída após uma nova tentativa de conexão com o Google. Revise os dados antes de salvar.");
-        }
-      } else {
-        throw new Error("Chave de IA indisponível.");
-      }
+      const raw =
+        config.provider === "openai" && config.openaiKey
+          ? await callOpenAI(config.model, config.openaiKey, files, text, hints)
+          : config.geminiKey
+            ? await callGemini(config.model, config.geminiKey, files, text, hints)
+            : null;
+      if (!raw) throw new Error("Chave de IA indisponível.");
       const mapped = mapRaw(raw, hints, "ia");
       if (!mapped.analysis.summary) {
         warnings.push("A IA não retornou parecer textual; a análise será gerada automaticamente pelos valores.");
@@ -445,20 +430,18 @@ export async function extractQuotation({
       return {
         draft: mapped,
         mode: "ia",
-        provider: config.provider === "openai" ? `OpenAI · ${usedModel}` : `Google Gemini · ${usedModel}`,
+        provider:
+          config.provider === "openai"
+            ? `OpenAI · ${config.model}`
+            : `Google Gemini · ${config.model}`,
         warnings,
         fileSummaries,
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : "Erro desconhecido na análise de IA.";
       warnings.push(message);
-      // Não apresentar texto local como se os PDFs tivessem sido lidos pela IA.
-      if (signal?.aborted || files.length > 0 || !text.trim()) throw new Error(message);
+      if (!text.trim()) throw new Error(message);
     }
-  }
-
-  if (files.length > 0 && config.provider === "none") {
-    throw new Error(NO_AI_MESSAGE);
   }
 
   if (text.trim()) {

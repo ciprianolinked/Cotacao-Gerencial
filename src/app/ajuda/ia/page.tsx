@@ -59,16 +59,6 @@ const STEPS = [
 
 const ERRORS = [
   {
-    symptom: "“O Google não conseguiu concluir a análise”",
-    cause: "O Google retornou um erro durante a análise. Isso pode acontecer por indisponibilidade temporária, mesmo com PDFs pequenos.",
-    fix: "O aplicativo tenta novamente e pode usar outra conexão ou modelo compatível, mantendo todos os arquivos na mesma análise. Se não conseguir concluir, os arquivos continuam selecionados. Confira o status do Gemini e a cota do projeto no Google AI Studio antes de tentar novamente.",
-  },
-  {
-    symptom: "“O Gemini não respondeu dentro do tempo disponível”",
-    cause: "A leitura de vários documentos depende do número de páginas, da complexidade e da disponibilidade do Google, não apenas do tamanho dos PDFs.",
-    fix: "Os arquivos continuam selecionados. Tente a análise novamente; se o erro persistir, confira o status e os limites do seu projeto no Google AI Studio. Na Vercel, publique a versão atual do aplicativo e confirme que o Fluid Compute está ativo.",
-  },
-  {
     symptom: "“A chave do Gemini não é válida”",
     cause: "A chave foi colada incompleta ou com espaço a mais no início/fim.",
     fix: "Volte ao AI Studio, copie de novo com o botão de copiar e cole novamente. Confira se começa com “AIza”.",
@@ -84,9 +74,14 @@ const ERRORS = [
     fix: "Consulte os limites e a cota do seu projeto no Google AI Studio. Dependendo do limite atingido, talvez seja necessário aguardar a renovação por minuto ou por dia.",
   },
   {
-    symptom: "“O serviço do Google está instável”",
-    cause: "O serviço do Google pode estar temporariamente indisponível ou sobrecarregado.",
-    fix: "Atualize o aplicativo para a versão mais recente. Ela tenta novamente automaticamente e preserva os arquivos; se persistir, consulte a página de status do Gemini e os limites da sua conta.",
+    symptom: "“O modelo do Google está sobrecarregado (erro 503)”",
+    cause: "Muita gente usando o plano gratuito ao mesmo tempo. O aplicativo tenta de novo sozinho uma vez antes de mostrar este aviso.",
+    fix: "Aguarde alguns minutos e tente novamente, de preferência com menos arquivos por vez (1 ou 2 PDFs). Seus mapas salvos não são afetados.",
+  },
+  {
+    symptom: "“O Google devolveu um erro temporário (erro 500, 502 ou 504)”",
+    cause: "Falha passageira nos servidores do Google.",
+    fix: "Aguarde alguns minutos e tente novamente. Se o mesmo código se repetir várias vezes seguidas, confira a página de status do Google AI Studio (aistudio.google.com/status).",
   },
   {
     symptom: "Não acho o botão “Get API key”",

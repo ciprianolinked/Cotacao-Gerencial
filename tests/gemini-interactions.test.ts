@@ -1,14 +1,79 @@
 import "dotenv/config";
 import assert from "node:assert/strict";
 import { after, test } from "node:test";
-import { createGeminiInteraction, resolveGeminiModel } from "../src/lib/server/gemini";
+import { buildModelChain, createGeminiInteraction, resolveGeminiModel } from "../src/lib/server/gemini";
 
-test("seleciona o modelo atual e corrige a configuração antiga", () => {
-  assert.equal(resolveGeminiModel(), "gemini-3.8-flash");
-  assert.equal(resolveGeminiModel("gemini-2.5-flash"), "gemini-3.8-flash");
-  assert.equal(resolveGeminiModel(" models/gemini-2.5-flash "), "gemini-3.8-flash");
-  assert.equal(resolveGeminiModel("models/gemini-3.8-flash"), "gemini-3.8-flash");
+test("usa o modelo rápido por padrão e substitui os lentos/desativados", () => {
+  assert.equal(resolveGeminiModel(), "gemini-3.5-flash-lite");
+  assert.equal(resolveGeminiModel("gemini-2.5-flash"), "gemini-3.5-flash-lite");
+  assert.equal(resolveGeminiModel(" models/gemini-2.5-flash "), "gemini-3.5-flash-lite");
+  // 3.8-flash levou ~130 s com 2 PDFs em teste real: é trocado pelo padrão.
+  assert.equal(resolveGeminiModel("models/gemini-3.8-flash"), "gemini-3.5-flash-lite");
   assert.equal(resolveGeminiModel("gemini-modelo-personalizado"), "gemini-modelo-personalizado");
+});
+
+test("monta a fila de modelos começando pelo escolhido, sem repetir", () => {
+  const chain = buildModelChain();
+  assert.equal(chain[0], "gemini-3.5-flash-lite");
+  assert.equal(new Set(chain).size, chain.length);
+  assert.ok(chain.length >= 3);
+  const custom = buildModelChain("gemini-3.6-flash");
+  assert.equal(custom[0], "gemini-3.6-flash");
+  assert.equal(new Set(custom).size, custom.length);
+});
+
+test("troca de modelo sozinho quando o primeiro está sobrecarregado", async () => {
+  const originalFetch = globalThis.fetch;
+  const used: string[] = [];
+  globalThis.fetch = async (_url, init) => {
+    const body = JSON.parse(String(init?.body)) as { model: string };
+    used.push(body.model);
+    if (used.length === 1) {
+      return new Response(
+        JSON.stringify({
+          error: { code: 503, message: `${body.model} is currently experiencing high demand.`, status: "UNAVAILABLE" },
+        }),
+        { status: 503 },
+      );
+    }
+    return Response.json({
+      status: "completed",
+      steps: [{ type: "model_output", content: [{ type: "text", text: '{"ok":true}' }] }],
+    });
+  };
+  try {
+    const result = await createGeminiInteraction({
+      model: "gemini-3.5-flash-lite",
+      apiKey: "chave-de-teste",
+      input: [{ type: "text", text: "Teste" }],
+    });
+    assert.equal(result, '{"ok":true}');
+    assert.equal(used.length, 2);
+    assert.notEqual(used[0], used[1], "deveria tentar um modelo diferente");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("erro definitivo (chave inválida) não fica trocando de modelo", async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls += 1;
+    return new Response(
+      JSON.stringify({ error: { code: 400, message: "API key not valid.", status: "INVALID_ARGUMENT" } }),
+      { status: 400 },
+    );
+  };
+  try {
+    await assert.rejects(
+      createGeminiInteraction({ model: "gemini-3.5-flash-lite", apiKey: "x", input: [{ type: "text", text: "a" }] }),
+      /chave do Gemini não é válida/i,
+    );
+    assert.equal(calls, 1, "não deve repetir quando o erro é definitivo");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("envia texto, PDF e imagem à API Interactions com resposta estruturada", async () => {
@@ -21,9 +86,9 @@ test("envia texto, PDF e imagem à API Interactions com resposta estruturada", a
     assert.equal(new Headers(init?.headers).get("x-goog-api-key"), "chave-de-teste");
     assert.ok(!String(url).includes("chave-de-teste"));
     const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
-    assert.equal(body.model, "gemini-3.8-flash");
+    assert.equal(body.model, "gemini-3.5-flash-lite");
     assert.equal(body.store, false);
-    assert.deepEqual(body.generation_config, { thinking_level: "low" });
+    assert.deepEqual(body.generation_config, { thinking_level: "low", max_output_tokens: 32768 });
     assert.deepEqual(body.response_format, { type: "text", mime_type: "application/json", schema });
     assert.deepEqual(body.input, [
       { type: "text", text: "Analisar propostas" },
@@ -49,6 +114,7 @@ test("envia texto, PDF e imagem à API Interactions com resposta estruturada", a
         { type: "image", mime_type: "image/jpeg", data: "anBn" },
       ],
       responseSchema: schema,
+      generationConfig: { thinking_level: "low", max_output_tokens: 32768 },
     });
     assert.equal(result, '{"suppliers":[]}');
     assert.equal(called, true);
@@ -66,13 +132,75 @@ test("mostra orientação amigável quando o modelo não está disponível", asy
         model: "gemini-3.8-flash",
         apiKey: "chave-de-teste",
         input: [{ type: "text", text: "Teste" }],
-        retryBaseDelayMs: 0,
       }),
       (error: unknown) => {
         assert.ok(error instanceof Error);
         assert.match(error.message, /modelo Gemini configurado não está disponível/i);
-        assert.match(error.message, /Google AI Studio/);
+        assert.match(error.message, /gemini-3\.8-flash/);
         assert.doesNotMatch(error.message, /detalhes privados|chave-de-teste/);
+        return true;
+      },
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("tenta de novo sozinho quando o Google está sobrecarregado (503) e depois conclui", async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls += 1;
+    if (calls === 1) {
+      return new Response(
+        JSON.stringify({
+          error: {
+            code: 503,
+            message: "The model is overloaded. Please try again later.",
+            status: "UNAVAILABLE",
+            details: [{ "@type": "type.googleapis.com/google.rpc.RetryInfo", retryDelay: "2s" }],
+          },
+        }),
+        { status: 503 },
+      );
+    }
+    return Response.json({
+      status: "completed",
+      steps: [{ type: "model_output", content: [{ type: "text", text: '{"suppliers":[]}' }] }],
+    });
+  };
+  try {
+    const result = await createGeminiInteraction({
+      model: "gemini-3.8-flash",
+      apiKey: "chave-de-teste",
+      input: [{ type: "text", text: "Teste" }],
+    });
+    assert.equal(result, '{"suppliers":[]}');
+    assert.equal(calls, 2);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("quando a sobrecarga persiste, orienta a aguardar e mostra o código do erro", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    new Response(
+      JSON.stringify({ error: { code: 503, message: "The model is overloaded.", status: "UNAVAILABLE" } }),
+      { status: 503 },
+    );
+  try {
+    await assert.rejects(
+      createGeminiInteraction({
+        model: "gemini-3.8-flash",
+        apiKey: "chave-de-teste",
+        input: [{ type: "text", text: "Teste" }],
+      }),
+      (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.match(error.message, /sobrecarregado/i);
+        assert.match(error.message, /503/);
+        assert.doesNotMatch(error.message, /chave-de-teste/);
         return true;
       },
     );
@@ -124,7 +252,7 @@ test("o teste de chave e a extração usam o mesmo modelo e a mesma API", async 
   try {
     const { testGeminiKey, extractQuotation } = await import("../src/lib/ai");
     const check = await testGeminiKey("chave-ficticia-para-teste");
-    assert.deepEqual(check, { ok: true, model: "gemini-3.8-flash" });
+    assert.deepEqual(check, { ok: true, model: "gemini-3.5-flash-lite" });
     const result = await extractQuotation({
       files: [
         { name: "proposta.pdf", type: "application/pdf", size: 3, base64: "cGRm" },
@@ -134,12 +262,14 @@ test("o teste de chave e a extração usam o mesmo modelo e a mesma API", async 
       hints: {},
     });
     assert.equal(result.mode, "ia");
-    assert.match(result.provider, /gemini-3\.8-flash/);
+    assert.match(result.provider, /gemini-3\.5-flash-lite/);
     assert.equal(result.draft.suppliers[0].name, "Fornecedor de teste");
     assert.equal(result.draft.items[0].prices[result.draft.suppliers[0].id], 12.5);
     assert.equal(requests.length, 2);
-    assert.equal(requests[0].model, "gemini-3.8-flash");
-    assert.equal(requests[1].model, "gemini-3.8-flash");
+    assert.equal(requests[0].model, "gemini-3.5-flash-lite");
+    assert.equal(requests[1].model, "gemini-3.5-flash-lite");
+    // Extração usa raciocínio leve para responder mais rápido.
+    assert.deepEqual(requests[1].generation_config, { thinking_level: "low", max_output_tokens: 32768 });
     assert.ok(Array.isArray(requests[1].input));
     const input = requests[1].input as Array<{ type: string; mime_type?: string }>;
     assert.ok(input.some((part) => part.type === "document" && part.mime_type === "application/pdf"));

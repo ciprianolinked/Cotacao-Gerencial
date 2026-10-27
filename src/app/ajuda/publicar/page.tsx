@@ -70,10 +70,6 @@ const questions = [
     a: "Na Vercel, confira se DATABASE_URL está em Production e contém a conexão completa do Neon, incluindo sslmode. Depois faça Redeploy. No Neon, confirme que executou o SQL deste guia na mesma branch e no mesmo banco selecionados na conexão. O teste /api/health confirma a conexão, mas sozinho não confirma a existência das tabelas.",
   },
   {
-    q: "A IA demorou mesmo com arquivos pequenos. Por quê?",
-    a: "O tempo depende do conteúdo, do número de páginas e da disponibilidade do Google, não apenas dos kilobytes do arquivo. A versão atual aguarda por mais tempo e mantém os arquivos selecionados em caso de falha. Se persistir após publicar a atualização, confira o status e os limites do Gemini no Google AI Studio e os logs da Vercel. O projeto usa Fluid Compute para permitir análises mais longas.",
-  },
-  {
     q: "Apareceu o erro 413 ao enviar um PDF. Como resolvo?",
     a: "A Vercel limita o tamanho total de uma requisição a 4,5 MB. Comprima ou reduza os PDFs e imagens para manter toda a seleção abaixo de 4 MB, com margem para o formulário. O limite é para todos os arquivos enviados juntos. Atenção: aplicar uma nova análise substitui os itens e fornecedores atuais; ela não junta automaticamente resultados de envios separados.",
   },
