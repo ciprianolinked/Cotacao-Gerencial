@@ -7,7 +7,8 @@ import type { CondominiumRecord } from "@/lib/types";
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Condomínios · Gerencial" };
 
-export default async function CondominiosPage() {
+export default async function CondominiosPage({ searchParams }: { searchParams: Promise<{ editar?: string }> }) {
+  const { editar } = await searchParams;
   let initial: Array<CondominiumRecord & { mapCount: number }> = [];
   let dbError = false;
   try {
@@ -19,5 +20,5 @@ export default async function CondominiosPage() {
   } catch {
     dbError = true;
   }
-  return <AppShell><CondominiumsManager initial={initial} dbError={dbError} /></AppShell>;
+  return <AppShell><CondominiumsManager initial={initial} dbError={dbError} initialEditingId={editar} /></AppShell>;
 }

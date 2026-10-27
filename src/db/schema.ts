@@ -1,7 +1,6 @@
 import {
   date,
   index,
-  integer,
   jsonb,
   pgTable,
   text,
@@ -14,23 +13,6 @@ import type {
   QuotationAnalysis,
   Supplier,
 } from "@/lib/types";
-
-/**
- * Histórico de arquivos PDF gerados pelo aplicativo (mapas e indicadores).
- * Guarda o nome do arquivo entregue no download, sem armazenar o binário.
- */
-export const pdfExports = pgTable("pdf_exports", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  fileName: text("file_name").notNull(),
-  kind: text("kind").notNull().default("mapa"),
-  referenceId: uuid("reference_id"),
-  protocol: text("protocol"),
-  condominium: text("condominium"),
-  periodStart: date("period_start", { mode: "string" }),
-  periodEnd: date("period_end", { mode: "string" }),
-  sizeBytes: integer("size_bytes").notNull().default(0),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-});
 
 export const condominiums = pgTable("condominiums", {
   id: uuid("id").defaultRandom().primaryKey(),
@@ -68,13 +50,30 @@ export const quotations = pgTable(
   (table) => [index("quotations_date_idx").on(table.analysisDate)],
 );
 
-// Configurações do aplicativo (ex.: chave da IA gratuita configurada pelo painel).
 export const appSettings = pgTable("app_settings", {
   key: text("key").primaryKey(),
   value: text("value").notNull().default(""),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+/** Metadados de PDFs baixados: registra nome, tipo, mapa relacionado e filtros. */
+export const documentDownloads = pgTable(
+  "document_downloads",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    documentType: text("document_type").notNull(),
+    fileName: text("file_name").notNull(),
+    quotationId: uuid("quotation_id").references(() => quotations.id, { onDelete: "set null" }),
+    filters: jsonb("filters").$type<Record<string, string | number | boolean | null>>().notNull().default({}),
+    downloadedAt: timestamp("downloaded_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index("document_downloads_date_idx").on(table.downloadedAt),
+    index("document_downloads_quotation_idx").on(table.quotationId),
+  ],
+);
+
 export type QuotationRow = typeof quotations.$inferSelect;
 export type CondominiumRow = typeof condominiums.$inferSelect;
 export type AppSettingRow = typeof appSettings.$inferSelect;
+export type DocumentDownloadRow = typeof documentDownloads.$inferSelect;

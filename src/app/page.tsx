@@ -321,7 +321,7 @@ export default async function HomePage() {
                 {condominiums.map((condominium) => (
                   <li key={condominium.id} className="flex items-center justify-between gap-2 px-4 py-2.5">
                     <div className="min-w-0">
-                      <p className="truncate text-[12px] font-bold text-ink">{condominium.name}</p>
+                      <Link href={`/condominios?editar=${condominium.id}`} className="block truncate text-[12px] font-bold text-ink hover:text-brand-dark hover:underline" title="Abrir cadastro para editar">{condominium.name}</Link>
                       <p className="truncate text-[10px] text-slate-500">
                         {condominium.city ?? "Cidade não informada"}
                         {condominium.manager ? ` · ${condominium.manager}` : ""}

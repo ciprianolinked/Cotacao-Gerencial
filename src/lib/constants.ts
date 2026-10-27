@@ -51,6 +51,12 @@ export const KIND_LABEL: Record<QuotationKind, string> = {
   produtos: "Produtos",
 };
 
+// Compatibilidade com telas antigas do painel que importam o rótulo da natureza.
+export const NATURE_LABEL: Record<QuotationKind, string> = {
+  servico: "Serviço",
+  produtos: "Produtos",
+};
+
 export const MAX_SUPPLIERS = 5;
 export const MAX_FILES = 6;
 export const MAX_FILE_BYTES = 15 * 1024 * 1024;

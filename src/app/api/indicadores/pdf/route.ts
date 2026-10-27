@@ -1,51 +1,55 @@
 import { NextResponse } from "next/server";
-import { recordPdfExport } from "@/lib/server/downloads";
-import { buildIndicatorsPdf } from "@/lib/server/pdf";
 import { listQuotations } from "@/lib/server/quotations";
+import { generateIndicatorsPdf } from "@/lib/server/pdf";
+import { indicatorsPdfFilename, registerPdfDownload, safePdfFilename } from "@/lib/server/downloads";
 
-export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-export async function POST(request: Request) {
-  let body: { condominium?: unknown; start?: unknown; end?: unknown } = {};
-  try {
-    body = (await request.json()) as typeof body;
-  } catch {
-    body = {};
-  }
-  const condominium = typeof body.condominium === "string" ? body.condominium.slice(0, 200) : "";
-  const start = /^\d{4}-\d{2}-\d{2}$/.test(String(body.start)) ? String(body.start) : "";
-  const end = /^\d{4}-\d{2}-\d{2}$/.test(String(body.end)) ? String(body.end) : "";
+const isoDate = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value);
 
+export async function GET(request: Request) {
   try {
-    const records = await listQuotations();
-    const { buffer, fileName } = await buildIndicatorsPdf({
-      condominium,
-      start,
-      end,
-      generatedAt: new Date(),
-      records,
+    const params = new URL(request.url).searchParams;
+    const condominium = (params.get("condominio") ?? "").trim().slice(0, 200);
+    const start = (params.get("inicio") ?? "").trim();
+    const end = (params.get("fim") ?? "").trim();
+
+    if ((start && !isoDate(start)) || (end && !isoDate(end))) {
+      return NextResponse.json({ error: "O período contém uma data inválida. Atualize os filtros e tente novamente." }, { status: 400 });
+    }
+    if (start && end && start > end) {
+      return NextResponse.json({ error: "A data inicial deve ser anterior à data final." }, { status: 400 });
+    }
+
+    const all = await listQuotations();
+    const records = all.filter((record) =>
+      (!condominium || record.condominium === condominium) &&
+      (!start || record.analysisDate >= start) &&
+      (!end || record.analysisDate <= end),
+    );
+    const fileName = safePdfFilename(indicatorsPdfFilename(condominium, start, end));
+    const pdf = await generateIndicatorsPdf(records, { condominium, start, end });
+    await registerPdfDownload({
+      type: "indicadores",
+      fileName,
+      filters: { condominium: condominium || null, start: start || null, end: end || null, quotationCount: records.length },
     });
-    const exportRecord = await recordPdfExport({
-      fileName,
-      kind: "indicadores",
-      sizeBytes: buffer.byteLength,
-      condominium: condominium || null,
-      periodStart: start || null,
-      periodEnd: end || null,
-    }).catch(() => null);
 
-    return NextResponse.json({
-      fileName,
-      fileBase64: buffer.toString("base64"),
-      sizeBytes: buffer.byteLength,
-      generatedAt: new Date().toISOString(),
-      recorded: Boolean(exportRecord),
-      exportId: exportRecord?.id ?? null,
+    return new Response(new Uint8Array(pdf), {
+      status: 200,
+      headers: {
+        "Content-Type": "application/pdf",
+        "Content-Disposition": `attachment; filename="${fileName}"; filename*=UTF-8''${encodeURIComponent(fileName)}`,
+        "Content-Length": String(pdf.byteLength),
+        "Cache-Control": "private, no-store, max-age=0",
+        "X-Content-Type-Options": "nosniff",
+      },
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Não foi possível gerar o PDF dos indicadores.";
+    console.error("Erro ao gerar o PDF do dashboard de indicadores:", error);
+    const message = error instanceof Error ? error.message : "Não foi possível gerar o PDF dos indicadores. Tente novamente.";
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
