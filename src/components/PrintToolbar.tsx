@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowLeftIcon, DownloadIcon, PrinterIcon } from "./icons";
+import { ArrowLeftIcon, PrinterIcon } from "./icons";
 
 export function PrintToolbar({ quotationId, protocol }: { quotationId: string; protocol: string }) {
   return (
@@ -16,16 +16,10 @@ export function PrintToolbar({ quotationId, protocol }: { quotationId: string; p
             Documento {protocol} · formato A4
           </span>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <a href={`/api/quotations/${quotationId}/pdf`} className="btn btn-brand">
-            <DownloadIcon className="h-4 w-4" />
-            Baixar PDF
-          </a>
-          <button type="button" onClick={() => window.print()} className="btn btn-ghost">
-            <PrinterIcon className="h-4 w-4" />
-            Imprimir
-          </button>
-        </div>
+        <button type="button" onClick={() => window.print()} className="btn btn-brand">
+          <PrinterIcon className="h-4 w-4" />
+          Imprimir / salvar em PDF
+        </button>
       </div>
     </div>
   );

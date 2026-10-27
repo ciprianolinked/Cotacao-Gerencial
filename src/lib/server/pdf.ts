@@ -1,551 +1,515 @@
 import PDFDocument from "pdfkit";
 import { GERENCIAL_LOGO_PNG } from "@/lib/brand-assets";
-import { COST_TYPE_LABEL } from "@/lib/constants";
-import type { QuotationDraft, QuotationRecord } from "@/lib/types";
+import { COST_TYPE_LABEL, STATUS_LABEL } from "@/lib/constants";
 import {
   computeMetrics,
   formatCurrency,
   formatDateBR,
+  itemTotal,
   recordedSavings,
   supplierCostBreakdown,
-  supplierTotal,
 } from "@/lib/quotation";
+import type { QuotationDraft, QuotationRecord } from "@/lib/types";
 
-const C = {
-  ink: "#181447",
-  gold: "#FAB12A",
-  paper: "#F6F4EE",
-  line: "#DDD9CC",
-  text: "#302F42",
-  muted: "#777689",
-  green: "#0E4828",
-  greenLight: "#E7F0E9",
-  amberLight: "#FDF3DE",
-  white: "#FFFFFF",
-};
+const INK = "#181447";
+const INK_SOFT = "#26215E";
+const GOLD = "#FAB12A";
+const SUCCESS = "#0E4828";
+const SUCCESS_SOFT = "#E7F0E9";
+const LINE = "#E3E0D3";
+const MUTED = "#6B6B7D";
+const PAPER = "#F6F4EE";
+const TEXT = "#23233A";
+
+const PAGE_WIDTH = 595.28;
+const PAGE_HEIGHT = 841.89;
 const MARGIN = 34;
+const CONTENT_WIDTH = PAGE_WIDTH - MARGIN * 2;
 
-type PdfDoc = InstanceType<typeof PDFDocument>;
+type Doc = PDFKit.PDFDocument;
 
-function safeText(value: unknown): string {
-  return String(value ?? "")
-    .replace(/[\u2010-\u2015\u2212]/g, "-")
-    .replace(/[\u2018\u2019]/g, "'")
-    .replace(/[\u201C\u201D]/g, '"')
-    .replace(/\u2026/g, "...")
-    .replace(/[^\u0000-\u00FF\n\r\t]/g, "-");
+type TableOptions = {
+  x: number;
+  y: number;
+  width: number;
+  columns: { label: string; width: number; align?: "left" | "right" | "center" }[];
+  rows: { cells: string[]; emphasis?: boolean; tone?: "ink" | "best" | null }[];
+  minHeight?: number;
+  zebra?: boolean;
+};
+
+function sanitize(value: string): string {
+  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 }
 
-export async function renderPdf(
-  title: string,
-  draw: (doc: PdfDoc) => void,
-  layout: "portrait" | "landscape" = "landscape",
-): Promise<Buffer> {
-  const doc = new PDFDocument({
-    size: "A4",
-    layout,
-    margins: { top: MARGIN, right: MARGIN, bottom: 42, left: MARGIN },
-    bufferPages: true,
-    compress: true,
-    info: { Title: safeText(title), Author: "Gerencial · Governança Condominial", Creator: "Gerencial Mapa de Cotação" },
-  });
-  const chunks: Buffer[] = [];
-  return new Promise((resolve, reject) => {
-    doc.on("data", (chunk: Buffer | Uint8Array) => chunks.push(Buffer.from(chunk)));
-    doc.on("error", reject);
-    doc.on("end", () => resolve(Buffer.concat(chunks)));
-    try {
-      draw(doc);
-      addPageFooters(doc);
-      doc.end();
-    } catch (error) {
-      doc.destroy(error instanceof Error ? error : new Error("Falha ao gerar PDF."));
+export function slugify(value: string): string {
+  return sanitize(value).slice(0, 60) || "sem-nome";
+}
+
+export function mapFileName(draft: Pick<QuotationDraft, "condominium" | "analysisDate">, protocol: string): string {
+  const condo = slugify(draft.condominium || "condominio-nao-informado");
+  const date = draft.analysisDate || "sem-data";
+  return `Mapa-de-Cotacao_${sanitize(protocol) || "sem-protocolo"}_${condo}_${date}.pdf`;
+}
+
+export type IndicatorsInput = {
+  condominium: string;
+  start: string;
+  end: string;
+};
+
+export function indicatorsFileName(input: IndicatorsInput): string {
+  const condo = slugify(input.condominium || "todos-os-condominios");
+  const start = input.start || "inicio";
+  const end = input.end || "hoje";
+  return `Indicadores-Gerencial_${condo}_${start}_a_${end}.pdf`;
+}
+
+function layout(doc: Doc, columns: TableOptions["columns"], width: number) {
+  const flexible = columns.reduce((total, column) => total + column.width, 0);
+  const scale = width / flexible;
+  return columns.map((column) => ({ ...column, width: Math.round(column.width * scale * 100) / 100 }));
+}
+
+function drawTableCell(doc: Doc, text: string, x: number, y: number, width: number, options: { align?: "left" | "right" | "center"; bold?: boolean; size?: number; color?: string } = {}) {
+  doc.font(options.bold ? "Helvetica-Bold" : "Helvetica")
+    .fontSize(options.size ?? 8)
+    .fillColor(options.color ?? TEXT);
+  const height = doc.heightOfString(text, { width: width - 6 });
+  doc.text(text, x + 3, y + 3, { width: width - 6, align: options.align ?? "left", lineBreak: false });
+  return height + 6;
+}
+
+function drawTable(doc: Doc, options: TableOptions): number {
+  const columns = layout(doc, options.columns, options.width);
+  const headerHeight = 18;
+  let y = options.y;
+  const drawHeader = () => {
+    doc.rect(options.x, y, options.width, headerHeight).fill(INK);
+    let x = options.x;
+    for (const column of columns) {
+      drawTableCell(doc, column.label.toUpperCase(), x, y, column.width, {
+        align: column.align,
+        bold: true,
+        size: 6.5,
+        color: "#FFFFFF",
+      });
+      x += column.width;
     }
-  });
-}
+    y += headerHeight;
+  };
+  drawHeader();
 
-function addPageFooters(doc: PdfDoc) {
-  const range = doc.bufferedPageRange();
-  for (let page = range.start; page < range.start + range.count; page++) {
-    doc.switchToPage(page);
-    const width = doc.page.width;
-    const height = doc.page.height;
-    doc.save();
-    doc.strokeColor(C.line).lineWidth(0.6).moveTo(MARGIN, height - 31).lineTo(width - MARGIN, height - 31).stroke();
-    doc.font("Helvetica").fontSize(7.5).fillColor(C.muted)
-      .text("Gerencial · Governança Condominial", MARGIN, height - 23, { lineBreak: false });
-    doc.text(`${page - range.start + 1} / ${range.count}`, width - MARGIN - 60, height - 23, { width: 60, align: "right", lineBreak: false });
-    doc.restore();
-  }
-}
-
-function drawBrandBand(doc: PdfDoc, title: string, subtitle: string, protocol?: string, continuation = false) {
-  const width = doc.page.width;
-  const height = continuation ? 54 : 90;
-  doc.save();
-  doc.rect(0, 0, width, height).fill(C.ink);
-  doc.rect(0, height, width, 4).fill(C.gold);
-  try {
-    doc.image(Buffer.from(GERENCIAL_LOGO_PNG, "base64"), MARGIN, continuation ? 12 : 22, { fit: continuation ? [145, 27] : [178, 34] });
-  } catch {
-    doc.font("Helvetica-Bold").fontSize(19).fillColor(C.white).text("GERENCIAL", MARGIN, continuation ? 17 : 24);
-  }
-  const rightX = continuation ? width - 255 : width - 340;
-  doc.font("Helvetica-Bold").fontSize(continuation ? 11 : 17).fillColor(C.white)
-    .text(safeText(title), rightX, continuation ? 15 : 24, { width: 255, align: "right", ellipsis: true });
-  doc.font("Helvetica").fontSize(8.5).fillColor(C.gold)
-    .text(safeText(subtitle), rightX, continuation ? 31 : 48, { width: 255, align: "right", ellipsis: true });
-  if (protocol && !continuation) {
-    doc.roundedRect(width - MARGIN - 150, 64, 150, 17, 4).fill(C.gold);
-    doc.font("Helvetica-Bold").fontSize(8).fillColor(C.ink)
-      .text(`PROTOCOLO  ${safeText(protocol)}`, width - MARGIN - 146, 68, { width: 142, align: "center", lineBreak: false });
-  }
-  doc.restore();
-}
-
-function addNewPage(doc: PdfDoc, title: string, subtitle: string) {
-  doc.addPage({ size: "A4", layout: "landscape", margins: { top: MARGIN, right: MARGIN, bottom: 42, left: MARGIN } });
-  drawBrandBand(doc, title, subtitle, undefined, true);
-  doc.y = 70;
-}
-
-function drawSectionTitle(doc: PdfDoc, title: string, y: number, width: number) {
-  doc.font("Helvetica-Bold").fontSize(9).fillColor(C.ink).text(safeText(title.toUpperCase()), MARGIN, y, { width: width - MARGIN, lineBreak: false });
-  doc.strokeColor(C.gold).lineWidth(1.7).moveTo(MARGIN, y + 14).lineTo(width - MARGIN, y + 14).stroke();
-  return y + 21;
-}
-
-function drawField(doc: PdfDoc, label: string, value: string, x: number, y: number, width: number, height = 39) {
-  doc.roundedRect(x, y, width, height, 4).fill(C.paper);
-  doc.font("Helvetica-Bold").fontSize(7).fillColor(C.muted).text(safeText(label.toUpperCase()), x + 8, y + 6, { width: width - 16, lineBreak: false, ellipsis: true });
-  doc.font("Helvetica-Bold").fontSize(9).fillColor(C.ink).text(safeText(value || "—"), x + 8, y + 17, { width: width - 16, height: height - 19, ellipsis: true, lineGap: 1 });
-}
-
-function textHeight(doc: PdfDoc, text: string, width: number, size: number, bold = false): number {
-  doc.font(bold ? "Helvetica-Bold" : "Helvetica").fontSize(size);
-  return doc.heightOfString(safeText(text), { width: Math.max(12, width), lineGap: 1 });
-}
-
-function sectionWithPage(doc: PdfDoc, y: number, needed: number, title: string, subtitle: string, pageTitle: string): number {
-  const maxY = doc.page.height - 49;
-  if (y + needed > maxY) {
-    addNewPage(doc, pageTitle, subtitle);
-    y = doc.y;
+  for (const row of options.rows) {
+    const heights = row.cells.map((cell, index) => {
+      doc.font(row.emphasis ? "Helvetica-Bold" : "Helvetica").fontSize(8);
+      return doc.heightOfString(cell, { width: columns[index].width - 6 }) + 6;
+    });
+    const rowHeight = Math.max(options.minHeight ?? 15, ...heights);
+    if (y + rowHeight > PAGE_HEIGHT - MARGIN - 26) {
+      doc.addPage();
+      y = MARGIN + 6;
+      drawHeader();
+    }
+    if (row.tone === "ink") doc.rect(options.x, y, options.width, rowHeight).fill(INK);
+    else if (row.tone === "best") doc.rect(options.x, y, options.width, rowHeight).fill(SUCCESS_SOFT);
+    else if (options.zebra !== false && options.rows.indexOf(row) % 2 === 1) doc.rect(options.x, y, options.width, rowHeight).fill(PAPER);
+    let x = options.x;
+    row.cells.forEach((cell, index) => {
+      const tone = row.tone === "ink" ? "#FFFFFF" : row.tone === "best" ? SUCCESS : TEXT;
+      drawTableCell(doc, cell, x, y, columns[index].width, {
+        align: columns[index].align,
+        bold: Boolean(row.emphasis) || row.tone === "ink",
+        color: tone,
+      });
+      x += columns[index].width;
+    });
+    doc.moveTo(options.x, y + rowHeight).lineTo(options.x + options.width, y + rowHeight).lineWidth(0.5).strokeColor(LINE).stroke();
+    y += rowHeight;
   }
   return y;
 }
 
-function drawComparisonTable(doc: PdfDoc, record: QuotationRecord): number {
-  const pageWidth = doc.page.width;
-  const totalWidth = pageWidth - 2 * MARGIN;
-  const descWidth = Math.min(242, totalWidth * 0.32);
-  const qtyWidth = 40;
-  const unitWidth = 44;
-  const suppliers = record.suppliers;
-  const supplierWidth = (totalWidth - descWidth - qtyWidth - unitWidth) / Math.max(1, suppliers.length);
-  const cols = [descWidth, qtyWidth, unitWidth, ...suppliers.map(() => supplierWidth)];
-  const labels = ["Item / composição", "Qtd", "Un." , ...suppliers.map((supplier) => supplier.name || "Fornecedor")];
-
-  const drawHeader = (y: number) => {
-    let x = MARGIN;
-    const h = 31;
-    labels.forEach((label, index) => {
-      doc.rect(x, y, cols[index], h).fill(C.ink);
-      doc.font("Helvetica-Bold").fontSize(index >= 3 ? 7 : 7.5).fillColor(index >= 3 ? C.gold : C.white)
-        .text(safeText(label), x + 4, y + 6, { width: cols[index] - 8, height: h - 9, align: index === 1 || index >= 3 ? "center" : "left", ellipsis: true, lineGap: 1 });
-      x += cols[index];
-    });
-    return y + h;
-  };
-
-  let y = sectionWithPage(doc, doc.y, 54, "1. Comparativo de propostas", "Mapa de cotação", `Mapa ${record.protocol}`);
-  y = drawSectionTitle(doc, "1. Comparativo de propostas · preços em R$", y, pageWidth);
-  y = drawHeader(y);
-
-  record.items.forEach((item, rowIndex) => {
-    const type = item.costType === "mao_obra" || item.costType === "material" ? COST_TYPE_LABEL[item.costType] : COST_TYPE_LABEL.nao_discriminado;
-    const description = `${item.description || "Item sem descrição"}\n${type}`;
-    const descHeight = textHeight(doc, description, descWidth - 12, 7.3);
-    const height = Math.max(25, descHeight + 10);
-    if (y + height > doc.page.height - 49) {
-      addNewPage(doc, `Mapa ${record.protocol}`, "Continuação do comparativo");
-      y = doc.y;
-      y = drawHeader(y);
-    }
-    const lowPrices = suppliers.map((supplier) => item.prices[supplier.id]).filter((value): value is number => value !== null && value !== undefined && Number.isFinite(value));
-    const min = lowPrices.length ? Math.min(...lowPrices) : null;
-    const bg = rowIndex % 2 === 0 ? C.white : "#F8F7F2";
-    let x = MARGIN;
-    cols.forEach((width) => {
-      doc.rect(x, y, width, height).fill(bg).strokeColor(C.line).lineWidth(0.35).stroke();
-      x += width;
-    });
-    x = MARGIN;
-    doc.font("Helvetica").fontSize(7.3).fillColor(C.text).text(safeText(description), x + 6, y + 5, { width: descWidth - 12, height: height - 7, lineGap: 1 });
-    x += descWidth;
-    doc.font("Helvetica").fontSize(8).fillColor(C.text).text(String(item.quantity), x + 3, y + 8, { width: qtyWidth - 6, align: "center", lineBreak: false });
-    x += qtyWidth;
-    doc.font("Helvetica").fontSize(7.5).fillColor(C.text).text(safeText(item.unit), x + 3, y + 8, { width: unitWidth - 6, align: "center", lineBreak: false, ellipsis: true });
-    x += unitWidth;
-    suppliers.forEach((supplier) => {
-      const value = item.prices[supplier.id] ?? null;
-      const isLow = value !== null && min !== null && Math.abs(value - min) < 0.005;
-      if (isLow) doc.rect(x, y, supplierWidth, height).fill(C.greenLight);
-      doc.font(isLow ? "Helvetica-Bold" : "Helvetica").fontSize(7.2).fillColor(isLow ? C.green : C.text)
-        .text(formatCurrency(value), x + 3, y + 8, { width: supplierWidth - 6, align: "right", lineBreak: false, ellipsis: true });
-      x += supplierWidth;
-    });
-    y += height;
-  });
-
-  const totalsHeight = 20;
-  if (y + totalsHeight * 4 > doc.page.height - 49) {
-    addNewPage(doc, `Mapa ${record.protocol}`, "Continuação dos totais");
-    y = doc.y;
-    y = drawHeader(y);
+function sectionTitle(doc: Doc, title: string, hint?: string): number {
+  let y = doc.y + 14;
+  ensureSpace(doc, 30);
+  doc.font("Helvetica-Bold").fontSize(9.5).fillColor(INK).text(title.toUpperCase(), MARGIN, y, { characterSpacing: 0.6 });
+  if (hint) {
+    doc.font("Helvetica").fontSize(7).fillColor(MUTED).text(hint, MARGIN, y + 12, { align: "right", width: CONTENT_WIDTH, lineBreak: false });
   }
-  const types = ["total", "mao_obra", "material", "nao_discriminado"] as const;
-  const metrics = computeMetrics(record);
-  const rowLabels = ["TOTAL GERAL", "MÃO DE OBRA", "MATERIAL", "NÃO DISCRIMINADO"];
-  types.forEach((type, index) => {
-    let x = MARGIN;
-    const isTotal = type === "total";
-    const fill = isTotal ? C.ink : index % 2 === 0 ? C.paper : C.white;
-    const color = isTotal ? C.white : C.text;
-    const labelWidth = descWidth + qtyWidth + unitWidth;
-    doc.rect(x, y, labelWidth, totalsHeight).fill(fill).strokeColor(C.line).lineWidth(0.3).stroke();
-    doc.font("Helvetica-Bold").fontSize(isTotal ? 7.5 : 7).fillColor(color).text(rowLabels[index], x + 6, y + 6, { width: labelWidth - 12, align: "right", lineBreak: false });
-    x += labelWidth;
-    suppliers.forEach((supplier) => {
-      let total: number | null;
-      if (isTotal) total = supplierTotal(record.items, supplier.id);
-      else total = supplierCostBreakdown(record.items, supplier.id)[type].total;
-      const isBest = isTotal && metrics.isComparable && metrics.best?.supplier.id === supplier.id;
-      doc.rect(x, y, supplierWidth, totalsHeight).fill(isBest ? C.greenLight : fill).strokeColor(C.line).lineWidth(0.3).stroke();
-      doc.font(isTotal || isBest ? "Helvetica-Bold" : "Helvetica").fontSize(7.1).fillColor(isBest ? C.green : color)
-        .text(formatCurrency(total), x + 3, y + 6, { width: supplierWidth - 6, align: "right", lineBreak: false, ellipsis: true });
-      x += supplierWidth;
-    });
-    y += totalsHeight;
-  });
-  return y + 8;
+  doc.moveTo(MARGIN, y + 21).lineTo(MARGIN + CONTENT_WIDTH, y + 21).lineWidth(1).strokeColor(GOLD).stroke();
+  doc.y = y + 27;
+  return doc.y;
 }
 
-function drawQuotationPdf(doc: PdfDoc, record: QuotationRecord) {
-  const width = doc.page.width;
-  drawBrandBand(doc, "Mapa de Cotação", "Processo comparativo de propostas", record.protocol);
-  let y = 105;
-  const gap = 8;
-  const fieldW = (width - 2 * MARGIN - gap * 3) / 4;
-  drawField(doc, "Condomínio / Associação", record.condominium, MARGIN, y, fieldW * 2 + gap, 39);
-  drawField(doc, "Data de análise", formatDateBR(record.analysisDate), MARGIN + fieldW * 2 + gap * 2, y, fieldW, 39);
-  drawField(doc, "Natureza · Categoria", `${record.kind === "produtos" ? "Produtos" : "Serviço"} · ${record.category}`, MARGIN + fieldW * 3 + gap * 3, y, fieldW, 39);
-  y += 46;
-  drawField(doc, "A/C", record.recipient, MARGIN, y, fieldW, 37);
-  drawField(doc, "Serviço / Objeto", record.service, MARGIN + fieldW + gap, y, fieldW * 3 + gap * 2, 37);
-  y += 43;
-  const description = record.description || "Sem descrição adicional registrada.";
-  const descHeight = textHeight(doc, description, width - 2 * MARGIN - 16, 8);
-  const safeY = sectionWithPage(doc, y, descHeight + 29, "Descrição do escopo", record.protocol, `Mapa ${record.protocol}`);
-  if (safeY !== y) y = safeY;
-  doc.roundedRect(MARGIN, y, width - 2 * MARGIN, descHeight + 20, 4).fill(C.paper);
-  doc.font("Helvetica-Bold").fontSize(7).fillColor(C.muted).text("DESCRIÇÃO DO ESCOPO", MARGIN + 8, y + 6);
-  doc.font("Helvetica").fontSize(8).fillColor(C.text).text(safeText(description), MARGIN + 8, y + 17, { width: width - 2 * MARGIN - 16, lineGap: 1 });
-  y += descHeight + 29;
+function paragraph(doc: Doc, text: string, options: { size?: number; color?: string; bold?: boolean; width?: number; lineGap?: number } = {}): number {
+  ensureSpace(doc, 20);
+  doc.font(options.bold ? "Helvetica-Bold" : "Helvetica")
+    .fontSize(options.size ?? 8.5)
+    .fillColor(options.color ?? TEXT)
+    .text(text, MARGIN, doc.y, { width: options.width ?? CONTENT_WIDTH, lineGap: options.lineGap ?? 1.6 });
+  return doc.y;
+}
 
-  y = drawComparisonTableAt(doc, record, y);
+function ensureSpace(doc: Doc, needed: number): void {
+  if (doc.y + needed > PAGE_HEIGHT - MARGIN - 26) doc.addPage();
+}
 
-  const suppliers = record.suppliers;
-  const condTitleY = sectionWithPage(doc, y, 55, "Condições comerciais", record.protocol, `Mapa ${record.protocol}`);
-  y = drawSectionTitle(doc, "2. Condições comerciais e cobertura", condTitleY, width);
-  const columns = suppliers.length > 2 ? 2 : Math.max(1, suppliers.length);
-  const cardGap = 9;
-  const cardWidth = (width - 2 * MARGIN - cardGap * (columns - 1)) / columns;
-  for (let i = 0; i < suppliers.length; i += columns) {
-    const group = suppliers.slice(i, i + columns);
-    const cards = group.map((supplier) => {
-      const ranking = computeMetrics(record).rankings.find((row) => row.supplier.id === supplier.id);
-      const lines = [
-        `Proposta completa: ${formatCurrency(ranking && ranking.coverage === record.items.length ? ranking.total : null)}`,
-        `Cobertura: ${ranking?.coverage ?? 0}/${record.items.length} itens`,
-        `Entrega / execução: ${supplier.deliveryDays || "—"}`,
-        `Pagamento: ${supplier.paymentTerms || "—"}`,
-        `Validade: ${supplier.validity || "—"}`,
-        `Contato: ${supplier.contact || "—"}`,
-        supplier.notes ? `Observações: ${supplier.notes}` : "",
-      ].filter(Boolean);
-      return { supplier, lines: lines.join("\n") };
-    });
-    const cardH = Math.max(...cards.map((card) => textHeight(doc, card.lines, cardWidth - 20, 7.6) + 30), 54);
-    if (y + cardH > doc.page.height - 54) {
-      addNewPage(doc, `Mapa ${record.protocol}`, "Condições comerciais");
-      y = doc.y;
-      y = drawSectionTitle(doc, "2. Condições comerciais e cobertura", y, width);
-    }
-    cards.forEach((card, position) => {
-      const x = MARGIN + position * (cardWidth + cardGap);
-      doc.roundedRect(x, y, cardWidth, cardH, 5).fill(position === 0 && computeMetrics(record).best?.supplier.id === card.supplier.id ? C.greenLight : C.paper);
-      doc.font("Helvetica-Bold").fontSize(9).fillColor(C.ink).text(safeText(card.supplier.name || "Fornecedor"), x + 9, y + 8, { width: cardWidth - 18, ellipsis: true, lineBreak: false });
-      doc.font("Helvetica").fontSize(7.6).fillColor(C.text).text(safeText(card.lines), x + 9, y + 22, { width: cardWidth - 18, lineGap: 1 });
-    });
-    y += cardH + cardGap;
+function footer(doc: Doc, label: string): void {
+  const range = doc.bufferedPageRange();
+  for (let index = range.start; index < range.start + range.count; index++) {
+    doc.switchToPage(index);
+    const y = PAGE_HEIGHT - MARGIN - 2;
+    doc.font("Helvetica").fontSize(6.5).fillColor(MUTED);
+    doc.text(`Gerencial · Governança Condominial — ${label}`, MARGIN, y, { lineBreak: false, height: 10 });
+    doc.text(`Página ${index - range.start + 1} de ${range.count}`, MARGIN, y, { width: CONTENT_WIDTH, align: "right", lineBreak: false, height: 10 });
   }
+  doc.switchToPage(range.start + range.count - 1);
+}
 
-  const analysis = record.analysis;
-  const best = computeMetrics(record).best;
-  const compactY = sectionWithPage(doc, y, 150, "Parecer técnico", record.protocol, `Mapa ${record.protocol}`);
-  y = drawSectionTitle(doc, "3. Análise técnica e recomendação", compactY, width);
-  const analysisText = [analysis.summary || "Sem parecer registrado.", analysis.recommendation ? `RECOMENDAÇÃO: ${analysis.recommendation}` : ""].filter(Boolean).join("\n\n");
-  const analysisHeight = textHeight(doc, analysisText, (width - 2 * MARGIN) * 0.66 - 22, 8);
-  const indicatorsHeight = 71;
-  const boxHeight = Math.max(analysisHeight + 20, indicatorsHeight);
-  if (y + boxHeight > doc.page.height - 110) { addNewPage(doc, `Mapa ${record.protocol}`, "Análise e aprovação"); y = doc.y; }
-  const leftWidth = (width - 2 * MARGIN) * 0.68;
-  const rightWidth = width - 2 * MARGIN - leftWidth - 9;
-  doc.roundedRect(MARGIN, y, leftWidth, boxHeight, 5).fill(C.white).strokeColor(C.line).lineWidth(0.7).stroke();
-  doc.font("Helvetica").fontSize(8).fillColor(C.text).text(safeText(analysisText), MARGIN + 10, y + 10, { width: leftWidth - 20, lineGap: 2 });
-  const rightX = MARGIN + leftWidth + 9;
-  doc.roundedRect(rightX, y, rightWidth, boxHeight, 5).fill(C.ink);
-  doc.font("Helvetica-Bold").fontSize(7).fillColor(C.gold).text("PROPOSTA COMPLETA DE MENOR VALOR", rightX + 9, y + 9, { width: rightWidth - 18, lineBreak: false, ellipsis: true });
-  doc.font("Helvetica-Bold").fontSize(8.5).fillColor(C.white).text(safeText(best?.supplier.name || "Aguardando propostas completas"), rightX + 9, y + 23, { width: rightWidth - 18, height: 24, ellipsis: true });
-  doc.font("Helvetica-Bold").fontSize(12).fillColor(C.gold).text(formatCurrency(best?.total ?? null), rightX + 9, y + 49, { width: rightWidth - 18 });
-  y += boxHeight + 9;
-
-  const metrics = computeMetrics(record);
-  const outcome = recordedSavings(record);
-  const extra = outcome !== null && record.analysis.outcome
-    ? `Resultado confirmado: referência ${formatCurrency(record.analysis.outcome.referenceAmount)}; contratado ${formatCurrency(record.analysis.outcome.contractedAmount)}; diferença ${formatCurrency(outcome)}.`
-    : `Economia potencial: ${formatCurrency(metrics.savings)}${metrics.isComparable ? ` (${metrics.savingsPercent.toFixed(1)}% frente à maior proposta completa)` : " — exige duas propostas completas"}.`;
-  if (y + 32 > doc.page.height - 100) { addNewPage(doc, `Mapa ${record.protocol}`, "Observações e aprovação"); y = doc.y; }
-  doc.roundedRect(MARGIN, y, width - 2 * MARGIN, 30, 4).fill(C.amberLight);
-  doc.font("Helvetica-Bold").fontSize(8).fillColor(C.ink).text(safeText(extra), MARGIN + 9, y + 10, { width: width - 2 * MARGIN - 18, ellipsis: true });
-  y += 38;
-
-  if (analysis.notes) {
-    const notesH = textHeight(doc, analysis.notes, width - 2 * MARGIN - 16, 7.7);
-    const noteY = sectionWithPage(doc, y, notesH + 35, "Observações", record.protocol, `Mapa ${record.protocol}`);
-    y = drawSectionTitle(doc, "Observações", noteY, width);
-    doc.font("Helvetica").fontSize(7.7).fillColor(C.text).text(safeText(analysis.notes), MARGIN, y + 4, { width: width - 2 * MARGIN, lineGap: 1 });
-    y += notesH + 13;
-  }
-
-  const signY = sectionWithPage(doc, y, 48, "Aprovação", record.protocol, `Mapa ${record.protocol}`);
-  const colWidth = (width - 2 * MARGIN - 36) / 3;
-  ["Analista responsável", "Síndico(a)", "Conselho consultivo"].forEach((label, index) => {
-    const x = MARGIN + index * (colWidth + 18);
-    doc.moveTo(x, signY + 22).lineTo(x + colWidth, signY + 22).strokeColor(C.muted).lineWidth(0.7).stroke();
-    doc.font("Helvetica-Bold").fontSize(7.3).fillColor(C.ink).text(label.toUpperCase(), x, signY + 27, { width: colWidth, align: "center" });
+function collect(doc: Doc): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    doc.on("data", (chunk: Buffer) => chunks.push(chunk));
+    doc.on("end", () => resolve(Buffer.concat(chunks)));
+    doc.on("error", reject);
   });
 }
 
-function drawComparisonTableAt(doc: PdfDoc, record: QuotationRecord, initialY: number): number {
-  const width = doc.page.width;
-  const totalWidth = width - 2 * MARGIN;
-  const supplierCount = Math.max(1, record.suppliers.length);
-  const descWidth = Math.min(230, totalWidth * 0.30);
-  const qtyWidth = 39;
-  const unitWidth = 44;
-  const priceWidth = (totalWidth - descWidth - qtyWidth - unitWidth) / supplierCount;
-  const columns = [descWidth, qtyWidth, unitWidth, ...record.suppliers.map(() => priceWidth)];
-  const drawHead = (y: number) => {
-    let x = MARGIN;
-    const labels = ["Item / custo", "Qtd", "Un.", ...record.suppliers.map((supplier) => supplier.name || "Fornecedor")];
-    labels.forEach((label, i) => {
-      doc.rect(x, y, columns[i], 27).fill(C.ink);
-      doc.font("Helvetica-Bold").fontSize(6.8).fillColor(i >= 3 ? C.gold : C.white).text(safeText(label), x + 3, y + 6, { width: columns[i] - 6, height: 17, align: i >= 3 ? "center" : i === 1 ? "center" : "left", ellipsis: true });
-      x += columns[i];
-    });
-    return y + 27;
-  };
-  let y = drawHead(initialY);
-  for (const [index, item] of record.items.entries()) {
-    const desc = `${item.description || "Item sem descrição"}\n${COST_TYPE_LABEL[item.costType ?? "nao_discriminado"]}`;
-    const rowHeight = Math.max(25, textHeight(doc, desc, descWidth - 12, 7) + 9);
-    if (y + rowHeight > doc.page.height - 55) { addNewPage(doc, `Mapa ${record.protocol}`, "Comparativo de propostas — continuação"); y = drawHead(doc.y); }
-    const rowBg = index % 2 === 0 ? C.white : C.paper;
-    let x = MARGIN;
-    columns.forEach((w) => { doc.rect(x, y, w, rowHeight).fill(rowBg).strokeColor(C.line).lineWidth(0.35).stroke(); x += w; });
-    x = MARGIN;
-    doc.font("Helvetica").fontSize(7).fillColor(C.text).text(safeText(desc), x + 5, y + 5, { width: descWidth - 10, height: rowHeight - 6, lineGap: 1 });
-    x += descWidth;
-    doc.font("Helvetica").fontSize(7.5).fillColor(C.text).text(String(item.quantity), x + 2, y + 8, { width: qtyWidth - 4, align: "center" });
-    x += qtyWidth;
-    doc.font("Helvetica").fontSize(7).fillColor(C.text).text(safeText(item.unit), x + 2, y + 8, { width: unitWidth - 4, align: "center", ellipsis: true });
-    x += unitWidth;
-    const values = record.suppliers.map((supplier) => item.prices[supplier.id] ?? null).filter((value): value is number => value !== null);
-    const min = values.length ? Math.min(...values) : null;
-    record.suppliers.forEach((supplier) => {
-      const value = item.prices[supplier.id] ?? null;
-      const isMin = value !== null && min !== null && value === min;
-      if (isMin) doc.rect(x, y, priceWidth, rowHeight).fill(C.greenLight);
-      doc.font(isMin ? "Helvetica-Bold" : "Helvetica").fontSize(7).fillColor(isMin ? C.green : C.text).text(formatCurrency(value), x + 2, y + 8, { width: priceWidth - 4, align: "right", ellipsis: true });
-      x += priceWidth;
-    });
-    y += rowHeight;
+function documentBase(title: string, subtitle: string): { doc: Doc; done: Promise<Buffer> } {
+  const doc = new PDFDocument({ size: "A4", margin: MARGIN, info: { Title: title, Author: "Gerencial · Governança Condominial" } });
+  // O rodapé é desenhado no fim, sobre as páginas já em buffer. Escrever durante
+  // "pageAdded" dispara quebras de página em cascata dentro do pdfkit.
+  void subtitle;
+  return { doc, done: collect(doc) };
+}
+
+/** Gera o PDF do mapa de cotação com o layout institucional da Gerencial. */
+export async function buildMapPdf(draft: QuotationDraft, protocol: string): Promise<{ buffer: Buffer; fileName: string }> {
+  const fileName = mapFileName(draft, protocol);
+  const { doc, done } = documentBase(`Mapa de Cotação ${protocol}`, `Mapa de Cotação ${protocol}`);
+  const metrics = computeMetrics(draft);
+  const suppliers = draft.suppliers.filter((supplier) => supplier.name.trim().length > 0 || draft.items.some((item) => item.prices?.[supplier.id] != null));
+  const items = draft.items.filter((item) => item.description.trim().length > 0 || item.quantity > 0);
+
+  // Cabeçalho institucional
+  doc.rect(0, 0, PAGE_WIDTH, 84).fill(INK);
+  doc.image(Buffer.from(GERENCIAL_LOGO_PNG, "base64"), MARGIN, 26, { height: 30 });
+  doc.font("Helvetica").fontSize(6.5).fillColor(GOLD).text("DOCUMENTO DE GOVERNANÇA", MARGIN, 20, { width: CONTENT_WIDTH, align: "right", characterSpacing: 0.8 });
+  doc.font("Helvetica-Bold").fontSize(19).fillColor("#FFFFFF").text("Mapa de Cotação", MARGIN, 30, { width: CONTENT_WIDTH, align: "right" });
+  doc.font("Helvetica").fontSize(7).fillColor("#FFFFFF").text(`Protocolo ${protocol} · ${formatDateBR(draft.analysisDate)}`, MARGIN, 54, { width: CONTENT_WIDTH, align: "right" });
+  doc.rect(0, 84, PAGE_WIDTH, 4).fill(GOLD);
+  doc.y = 100;
+
+  // Identificação
+  sectionTitle(doc, "Identificação do mapa", "Cabeçalho do processo");
+  ensureSpace(doc, 74);
+  doc.rect(MARGIN, doc.y, CONTENT_WIDTH, 72).fillAndStroke(PAPER, LINE);
+  const infoY = doc.y + 8;
+  const info = [
+    ["Condomínio / Associação", draft.condominium || "—"],
+    ["Data análise", formatDateBR(draft.analysisDate)],
+    ["A/C", draft.recipient || "—"],
+    ["Serviço / Objeto", draft.service || "—"],
+    ["Natureza", `${draft.kind === "produtos" ? "Produtos" : "Serviço"} · ${draft.category}`],
+    ["Status", STATUS_LABEL[draft.status]],
+  ] as const;
+  info.forEach((entry, index) => {
+    const x = MARGIN + 10 + (index % 2) * (CONTENT_WIDTH / 2);
+    const y = infoY + Math.floor(index / 2) * 20;
+    doc.font("Helvetica-Bold").fontSize(6.2).fillColor(MUTED).text(entry[0].toUpperCase(), x, y, { characterSpacing: 0.5, lineBreak: false });
+    doc.font("Helvetica-Bold").fontSize(8.6).fillColor(INK).text(entry[1], x, y + 8, { width: CONTENT_WIDTH / 2 - 20, lineBreak: false });
+  });
+  doc.y = infoY + 66;
+  if (draft.description.trim()) {
+    paragraph(doc, draft.description, { size: 8.2 });
   }
-  const metrics = computeMetrics(record);
-  const summaryRows = [
-    { title: "TOTAL GERAL", get: (id: string) => supplierTotal(record.items, id) },
-    { title: "MÃO DE OBRA", get: (id: string) => supplierCostBreakdown(record.items, id).mao_obra.total },
-    { title: "MATERIAL", get: (id: string) => supplierCostBreakdown(record.items, id).material.total },
-    { title: "NÃO DISCRIMINADO", get: (id: string) => supplierCostBreakdown(record.items, id).nao_discriminado.total },
+
+  // Itens comparativos
+  sectionTitle(doc, "1 · Mapa comparativo de propostas", "Valores em reais · menor preço destacado");
+  const supplierColumns = suppliers.map((supplier) => ({
+    label: supplier.name.trim() || "Fornecedor",
+    width: 68,
+    align: "right" as const,
+  }));
+  const columns = [
+    { label: "#", width: 18, align: "center" as const },
+    { label: "Descrição do item / escopo", width: 168 },
+    { label: "Tipo", width: 52 },
+    { label: "Qtd", width: 26, align: "right" as const },
+    { label: "Un.", width: 34 },
+    ...supplierColumns,
   ];
-  for (const [index, row] of summaryRows.entries()) {
-    if (y + 17 > doc.page.height - 53) { addNewPage(doc, `Mapa ${record.protocol}`, "Totais do comparativo"); y = drawHead(doc.y); }
-    const isTotal = index === 0;
-    const color = isTotal ? C.white : C.text;
-    const fill = isTotal ? C.ink : (index % 2 ? C.paper : C.white);
-    const labelWidth = descWidth + qtyWidth + unitWidth;
-    doc.rect(MARGIN, y, labelWidth, 17).fill(fill).strokeColor(C.line).lineWidth(0.3).stroke();
-    doc.font("Helvetica-Bold").fontSize(6.8).fillColor(color).text(row.title, MARGIN + 5, y + 5, { width: labelWidth - 10, align: "right" });
-    let x = MARGIN + labelWidth;
-    record.suppliers.forEach((supplier) => {
-      const best = isTotal && metrics.isComparable && metrics.best?.supplier.id === supplier.id;
-      doc.rect(x, y, priceWidth, 17).fill(best ? C.greenLight : fill).strokeColor(C.line).lineWidth(0.3).stroke();
-      doc.font(isTotal ? "Helvetica-Bold" : "Helvetica").fontSize(6.8).fillColor(best ? C.green : color)
-        .text(formatCurrency(row.get(supplier.id)), x + 2, y + 5, { width: priceWidth - 4, align: "right", ellipsis: true });
-      x += priceWidth;
-    });
-    y += 17;
+  const rows = items.map((item, index) => {
+    const lowest = Math.min(...suppliers.map((supplier) => item.prices?.[supplier.id]).filter((value): value is number => value != null));
+    const row = [
+      String(index + 1).padStart(2, "0"),
+      item.description || "Item sem descrição",
+      COST_TYPE_LABEL[item.costType ?? "nao_discriminado"],
+      String(item.quantity || "—"),
+      item.unit,
+      ...suppliers.map((supplier) => {
+        const value = item.prices?.[supplier.id] ?? null;
+        const isLowest = value !== null && Number.isFinite(lowest) && Math.abs(value - lowest) < 0.005;
+        return formatCurrency(value) + (isLowest ? " •" : "");
+      }),
+    ];
+    const allCovered = suppliers.length > 1 && suppliers.every((supplier) => item.prices?.[supplier.id] != null);
+    const bestIsHere = metrics.best?.supplier.id != null && allCovered;
+    return { cells: row, tone: null, emphasis: false, bestIsHere };
+  });
+  const tableRows = rows.map((row) => ({ cells: row.cells, tone: null as "ink" | "best" | null }));
+  let tableEnd = drawTable(doc, { x: MARGIN, y: doc.y, width: CONTENT_WIDTH, columns, rows: tableRows });
+  const totalsRow = {
+    cells: ["", "Total geral da proposta", "", "", "", ...suppliers.map((supplier) => formatCurrency(supplierCostBreakdown(items, supplier.id).mao_obra.total === null && supplierCostBreakdown(items, supplier.id).material.total === null && supplierCostBreakdown(items, supplier.id).nao_discriminado.total === null ? null : items.reduce((sum, item) => { const value = itemTotal(item, supplier.id); return value === null ? sum : sum + value; }, 0)))],
+    tone: "ink" as const,
+  };
+  tableEnd = drawTable(doc, { x: MARGIN, y: tableEnd, width: CONTENT_WIDTH, columns, rows: [totalsRow], zebra: false });
+  doc.y = tableEnd;
+  ensureSpace(doc, 60);
+  for (const type of ["mao_obra", "material", "nao_discriminado"] as const) {
+    doc.font("Helvetica-Bold").fontSize(7).fillColor(MUTED).text(COST_TYPE_LABEL[type], MARGIN, doc.y, { continued: true })
+      .font("Helvetica").fillColor(TEXT)
+      .text(`   ${suppliers.map((supplier) => formatCurrency(supplierCostBreakdown(items, supplier.id)[type].total)).join("   |   ")}`, { width: CONTENT_WIDTH });
   }
-  return y + 8;
+  paragraph(doc, "• marca o menor preço do item. Valores globais sem separação aparecem como não discriminados; não se presume a divisão entre mão de obra e material. Totais parciais não são comparados como propostas completas.", { size: 7, color: MUTED });
+
+  // Condições comerciais
+  sectionTitle(doc, "2 · Condições comerciais e cobertura", `${metrics.supplierCount} fornecedor(es) consultado(s)`);
+  const conditions = suppliers.map((supplier) => {
+    const ranking = metrics.rankings.find((row) => row.supplier.id === supplier.id);
+    return {
+      cells: [
+        supplier.name.trim() || "Fornecedor",
+        formatCurrency(ranking?.total ?? null),
+        ranking ? `${ranking.coverage}/${items.length}` : "—",
+        supplier.deliveryDays || "—",
+        supplier.paymentTerms || "—",
+        supplier.validity || "—",
+        supplier.contact || "—",
+      ],
+      tone: (ranking?.isBest && metrics.isComparable ? "best" : null) as "ink" | "best" | null,
+    };
+  });
+  doc.y = drawTable(doc, {
+    x: MARGIN,
+    y: doc.y,
+    width: CONTENT_WIDTH,
+    columns: [
+      { label: "Fornecedor", width: 132 },
+      { label: "Proposta", width: 60, align: "right" },
+      { label: "Cobertura", width: 46, align: "center" },
+      { label: "Entrega", width: 66 },
+      { label: "Pagamento", width: 70 },
+      { label: "Validade", width: 54 },
+      { label: "Contato", width: 96 },
+    ],
+    rows: conditions,
+  });
+
+  // Parecer e indicadores
+  sectionTitle(doc, "3 · Análise técnica e recomendação", "Parecer da governança");
+  ensureSpace(doc, 96);
+  const boxY = doc.y;
+  doc.rect(MARGIN, boxY, CONTENT_WIDTH * 0.63 - 6, 92).fillAndStroke("#FFFFFF", LINE);
+  doc.font("Helvetica-Bold").fontSize(6.2).fillColor(MUTED).text("PARECER", MARGIN + 8, boxY + 8, { characterSpacing: 0.5, lineBreak: false });
+  doc.font("Helvetica").fontSize(8).fillColor(TEXT).text(draft.analysis.summary || "A análise técnica é gerada a partir das propostas inseridas.", MARGIN + 8, boxY + 18, { width: CONTENT_WIDTH * 0.63 - 22 });
+  doc.font("Helvetica-Bold").fontSize(8).fillColor(INK).text(draft.analysis.recommendation || "Recomendação pendente de análise.", MARGIN + 8, boxY + 54, { width: CONTENT_WIDTH * 0.63 - 22 });
+  const sideX = MARGIN + CONTENT_WIDTH * 0.63 + 6;
+  const sideWidth = CONTENT_WIDTH * 0.37 - 6;
+  doc.rect(sideX, boxY, sideWidth, 92).fillAndStroke(PAPER, LINE);
+  doc.font("Helvetica-Bold").fontSize(6.2).fillColor(MUTED).text("MELHOR PROPOSTA", sideX + 8, boxY + 8, { characterSpacing: 0.5, lineBreak: false });
+  doc.font("Helvetica-Bold").fontSize(9).fillColor(INK).text(metrics.best?.supplier.name || "—", sideX + 8, boxY + 17, { width: sideWidth - 16 });
+  doc.font("Helvetica-Bold").fontSize(14).fillColor(SUCCESS).text(formatCurrency(metrics.best?.total ?? null), sideX + 8, boxY + 30);
+  doc.font("Helvetica-Bold").fontSize(6.2).fillColor(MUTED).text("ECONOMIA POTENCIAL", sideX + 8, boxY + 52, { characterSpacing: 0.5, lineBreak: false });
+  doc.font("Helvetica-Bold").fontSize(11).fillColor(INK).text(formatCurrency(metrics.isComparable ? metrics.savings : null), sideX + 8, boxY + 61);
+  doc.font("Helvetica").fontSize(6.5).fillColor(MUTED).text(metrics.isComparable ? `${metrics.savingsPercent.toFixed(1)}% frente à maior proposta` : "Requer 2 propostas completas", sideX + 8, boxY + 76, { width: sideWidth - 16 });
+  doc.y = boxY + 98;
+
+  const confirmed = recordedSavings(draft);
+  if (confirmed !== null && draft.analysis.outcome) {
+    sectionTitle(doc, "4 · Resultado confirmado da contratação");
+    const outcomeSupplier = draft.suppliers.find((supplier) => supplier.id === draft.analysis.outcome?.supplierId);
+    paragraph(doc, `Fornecedor: ${outcomeSupplier?.name || "—"} · Valor de referência: ${formatCurrency(draft.analysis.outcome.referenceAmount)} · Valor contratado: ${formatCurrency(draft.analysis.outcome.contractedAmount)} · Diferença: ${formatCurrency(confirmed)}`, { bold: true, size: 8.4 });
+  }
+
+  sectionTitle(doc, `${confirmed !== null ? "5" : "4"} · Observações e aprovação`);
+  ensureSpace(doc, 60);
+  const notesY = doc.y;
+  doc.rect(MARGIN, notesY, CONTENT_WIDTH, 40).lineWidth(0.7).stroke(LINE);
+  doc.font("Helvetica").fontSize(8).fillColor(TEXT).text(draft.analysis.notes || "Sem observações adicionais registradas.", MARGIN + 8, notesY + 6, { width: CONTENT_WIDTH - 16 });
+  doc.y = notesY + 46;
+  ensureSpace(doc, 46);
+  const signatureY = doc.y + 26;
+  const signatureWidth = (CONTENT_WIDTH - 24) / 3;
+  [
+    ["Analista responsável", "Gerencial · Governança Condominial"],
+    ["Síndico(a)", "Aprovação da assembleia / conselho"],
+    ["Conselho consultivo", "Ciência e validação"],
+  ].forEach((entry, index) => {
+    const x = MARGIN + index * (signatureWidth + 12);
+    doc.moveTo(x, signatureY).lineTo(x + signatureWidth, signatureY).lineWidth(0.8).strokeColor("#9CA3AF").stroke();
+    doc.font("Helvetica-Bold").fontSize(6.4).fillColor(INK).text(entry[0].toUpperCase(), x, signatureY + 4, { characterSpacing: 0.4, lineBreak: false });
+    doc.font("Helvetica").fontSize(6).fillColor(MUTED).text(entry[1], x, signatureY + 12, { width: signatureWidth });
+  });
+
+  footer(doc, protocol);
+  doc.end();
+  const buffer = await done;
+  return { buffer, fileName };
 }
 
-function drawDashboardPdf(doc: PdfDoc, records: QuotationRecord[], filters: { condominium: string; start: string; end: string }) {
-  const width = doc.page.width;
-  const subtitle = `${filters.condominium || "Todos os condomínios"} · ${filters.start || "Início"} a ${filters.end || "hoje"}`;
-  drawBrandBand(doc, "Indicadores para assembleia", subtitle);
-  let y = 107;
-  const calculated = records.map((record) => ({ record, metrics: computeMetrics(record), actual: recordedSavings(record) }));
-  const actual = calculated.filter((entry) => entry.actual !== null);
-  const confirmed = actual.reduce((sum, entry) => sum + (entry.actual ?? 0), 0);
-  const comparable = calculated.filter((entry) => entry.metrics.isComparable);
-  const potential = comparable.reduce((sum, entry) => sum + entry.metrics.savings, 0);
-  const completed = records.filter((record) => record.status === "concluido").length;
-  const supplierCount = calculated.reduce((sum, entry) => sum + entry.metrics.rankings.filter((row) => row.total !== null).length, 0);
-  const gap = 8;
-  const cardWidth = (width - 2 * MARGIN - gap * 3) / 4;
-  const stats = [
-    { label: "ECONOMIA CONFIRMADA", value: actual.length ? formatCurrency(confirmed) : "—", note: `${actual.length} contratação(ões) confirmada(s)` },
-    { label: "ECONOMIA POTENCIAL", value: comparable.length ? formatCurrency(potential) : "—", note: `${comparable.length} comparativo(s) completo(s)` },
-    { label: "MAPAS NO PERÍODO", value: String(records.length), note: `${completed} concluído(s)` },
-    { label: "PROPOSTAS COM PREÇO", value: String(supplierCount), note: "fornecedores avaliados" },
-  ];
-  stats.forEach((stat, index) => {
-    const x = MARGIN + index * (cardWidth + gap);
-    const fill = index === 0 ? C.ink : C.paper;
-    doc.roundedRect(x, y, cardWidth, 58, 5).fill(fill);
-    doc.font("Helvetica-Bold").fontSize(6.5).fillColor(index === 0 ? "#D8D5E8" : C.muted).text(stat.label, x + 9, y + 9, { width: cardWidth - 18 });
-    doc.font("Helvetica-Bold").fontSize(14).fillColor(index === 0 ? C.white : C.ink).text(stat.value, x + 9, y + 21, { width: cardWidth - 18, ellipsis: true });
-    doc.font("Helvetica").fontSize(6.4).fillColor(index === 0 ? C.gold : C.muted).text(stat.note, x + 9, y + 42, { width: cardWidth - 18, ellipsis: true });
+type IndicatorsPayload = {
+  condominium: string;
+  start: string;
+  end: string;
+  generatedAt: Date;
+  records: QuotationRecord[];
+};
+
+function monthLabel(month: string): string {
+  const [year, number] = month.split("-");
+  const names = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"];
+  return `${names[Number(number) - 1] ?? number}/${year.slice(2)}`;
+}
+
+/** Gera o PDF dos indicadores com os mesmos critérios da tela de assembleia. */
+export async function buildIndicatorsPdf(payload: IndicatorsPayload): Promise<{ buffer: Buffer; fileName: string }> {
+  const fileName = indicatorsFileName({ condominium: payload.condominium, start: payload.start, end: payload.end });
+  const { doc, done } = documentBase("Indicadores Gerencial", `Indicadores Gerencial · ${payload.condominium || "todos"}`);
+  const records = payload.records
+    .filter((record) => (!payload.condominium || record.condominium === payload.condominium) && (!payload.start || record.analysisDate >= payload.start) && (!payload.end || record.analysisDate <= payload.end))
+    .map((record) => ({ record, metrics: computeMetrics(record), recorded: recordedSavings(record) }));
+  const periodLabel = `${payload.start ? formatDateBR(payload.start) : "Início"} a ${payload.end ? formatDateBR(payload.end) : "hoje"}`;
+
+  doc.rect(0, 0, PAGE_WIDTH, 84).fill(INK);
+  doc.image(Buffer.from(GERENCIAL_LOGO_PNG, "base64"), MARGIN, 26, { height: 30 });
+  doc.font("Helvetica").fontSize(6.5).fillColor(GOLD).text("INDICADORES PARA ASSEMBLEIA", MARGIN, 20, { width: CONTENT_WIDTH, align: "right", characterSpacing: 0.8 });
+  doc.font("Helvetica-Bold").fontSize(19).fillColor("#FFFFFF").text("Resultados das cotações", MARGIN, 30, { width: CONTENT_WIDTH, align: "right" });
+  doc.font("Helvetica").fontSize(7).fillColor("#FFFFFF").text(`${payload.condominium || "Todos os condomínios"} · ${periodLabel}`, MARGIN, 54, { width: CONTENT_WIDTH, align: "right" });
+  doc.rect(0, 84, PAGE_WIDTH, 4).fill(GOLD);
+  doc.y = 100;
+
+  const confirmed = records.filter((entry) => entry.recorded !== null);
+  const confirmedTotal = confirmed.reduce((sum, entry) => sum + (entry.recorded ?? 0), 0);
+  const comparable = records.filter((entry) => entry.metrics.isComparable);
+  const potentialTotal = comparable.reduce((sum, entry) => sum + entry.metrics.savings, 0);
+  const withPrices = records.reduce((sum, entry) => sum + entry.metrics.rankings.filter((row) => row.total !== null).length, 0);
+  const completed = records.filter((entry) => entry.record.status === "concluido").length;
+
+  sectionTitle(doc, "Resumo do período", "Dados dos mapas salvos");
+  ensureSpace(doc, 62);
+  const cardWidth = (CONTENT_WIDTH - 18) / 4;
+  [
+    ["Economia confirmada", confirmed.length ? formatCurrency(confirmedTotal) : "—", `${confirmed.length} contratação(ões)`],
+    ["Economia potencial", comparable.length ? formatCurrency(potentialTotal) : "—", `${comparable.length} comparativo(s)`],
+    ["Mapas de cotação", String(records.length), `${completed} concluído(s)`],
+    ["Propostas com valor", String(withPrices), "Fornecedores com preço"],
+  ].forEach((entry, index) => {
+    const x = MARGIN + index * (cardWidth + 6);
+    const isPrimary = index === 0;
+    doc.rect(x, doc.y, cardWidth, 54).fill(isPrimary ? INK : "#FFFFFF").lineWidth(0.7).stroke(isPrimary ? INK : LINE);
+    doc.font("Helvetica-Bold").fontSize(5.8).fillColor(isPrimary ? "#FFFFFF" : MUTED).text(entry[0].toUpperCase(), x + 7, doc.y + 8, { characterSpacing: 0.4, width: cardWidth - 14 });
+    doc.font("Helvetica-Bold").fontSize(12).fillColor(isPrimary ? "#FFFFFF" : INK).text(entry[1], x + 7, doc.y + 19, { width: cardWidth - 14 });
+    doc.font("Helvetica").fontSize(6).fillColor(isPrimary ? "#FFFFFF" : MUTED).text(entry[2], x + 7, doc.y + 38, { width: cardWidth - 14 });
   });
-  y += 72;
+  doc.y += 62;
 
-  const grouped = new Map<string, { potential: number; confirmed: number; count: number }>();
-  for (const entry of calculated) {
-    const month = entry.record.analysisDate.slice(0, 7);
-    const row = grouped.get(month) ?? { potential: 0, confirmed: 0, count: 0 };
-    if (entry.metrics.isComparable) row.potential += entry.metrics.savings;
-    if (entry.actual !== null) row.confirmed += entry.actual;
-    row.count++;
-    grouped.set(month, row);
+  sectionTitle(doc, "Economia por mês", "Potencial versus confirmada");
+  const grouped = new Map<string, { count: number; potential: number; recorded: number }>();
+  for (const entry of records) {
+    const key = entry.record.analysisDate.slice(0, 7);
+    const value = grouped.get(key) ?? { count: 0, potential: 0, recorded: 0 };
+    value.count += 1;
+    if (entry.metrics.isComparable) value.potential += entry.metrics.savings;
+    if (entry.recorded !== null) value.recorded += entry.recorded;
+    grouped.set(key, value);
   }
-  const months = [...grouped.entries()].sort(([a], [b]) => a.localeCompare(b)).slice(-6);
-  if (months.length) {
-    y = drawSectionTitle(doc, "Evolução mensal", y, width);
-    const chartW = width - 2 * MARGIN - 124;
-    const max = Math.max(1, ...months.flatMap(([, row]) => [row.potential, Math.abs(row.confirmed)]));
-    for (const [month, row] of months) {
-      if (y + 23 > doc.page.height - 50) { addNewPage(doc, "Indicadores para assembleia", "Evolução mensal — continuação"); y = doc.y; }
-      doc.font("Helvetica-Bold").fontSize(7).fillColor(C.text).text(month, MARGIN, y + 5, { width: 51, lineBreak: false });
-      const bx = MARGIN + 55;
-      const potentialWidth = Math.max(row.potential > 0 ? 2 : 0, chartW * row.potential / max);
-      const confirmedWidth = Math.max(row.confirmed !== 0 ? 2 : 0, chartW * Math.abs(row.confirmed) / max);
-      doc.roundedRect(bx, y + 3, Math.min(chartW, potentialWidth), 5, 2).fill(C.gold);
-      doc.roundedRect(bx, y + 11, Math.min(chartW, confirmedWidth), 5, 2).fill(C.green);
-      doc.font("Helvetica").fontSize(6.5).fillColor(C.muted).text(`Potencial ${formatCurrency(row.potential)}  ·  Confirmada ${formatCurrency(row.confirmed)}`, bx, y + 18, { width: chartW + 62, lineBreak: false, ellipsis: true });
-      y += 30;
-    }
-    y += 4;
+  const months = [...grouped.entries()].sort(([a], [b]) => a.localeCompare(b)).slice(-8);
+  if (months.length === 0) {
+    paragraph(doc, "Sem dados para o período selecionado.", { size: 8, color: MUTED });
+  } else {
+    doc.y = drawTable(doc, {
+      x: MARGIN,
+      y: doc.y,
+      width: CONTENT_WIDTH,
+      columns: [
+        { label: "Mês", width: 70 },
+        { label: "Mapas", width: 52, align: "center" },
+        { label: "Economia potencial", width: 130, align: "right" },
+        { label: "Economia confirmada", width: 130, align: "right" },
+        { label: "Observação", width: 140 },
+      ],
+      rows: months.map(([month, value]) => ({
+        cells: [
+          monthLabel(month),
+          String(value.count),
+          formatCurrency(value.potential),
+          value.recorded === 0 && !records.some((entry) => entry.recorded !== null && entry.record.analysisDate.startsWith(month)) ? "—" : formatCurrency(value.recorded),
+          value.recorded < 0 ? "Contratação acima da referência" : "",
+        ],
+      })),
+    });
   }
+  doc.y += 6;
 
-  const costs: Record<"mao_obra" | "material" | "nao_discriminado", { amount: number; count: number }> = { mao_obra: { amount: 0, count: 0 }, material: { amount: 0, count: 0 }, nao_discriminado: { amount: 0, count: 0 } };
+  sectionTitle(doc, "Composição das propostas", "Menores propostas completas do período");
+  ensureSpace(doc, 56);
+  const composition: Record<"mao_obra" | "material" | "nao_discriminado", number> = { mao_obra: 0, material: 0, nao_discriminado: 0 };
   for (const entry of comparable) {
     if (!entry.metrics.best) continue;
     const breakdown = supplierCostBreakdown(entry.record.items, entry.metrics.best.supplier.id);
-    for (const type of ["mao_obra", "material", "nao_discriminado"] as const) {
-      if (breakdown[type].total !== null) { costs[type].amount += breakdown[type].total; costs[type].count++; }
-    }
+    composition.mao_obra += breakdown.mao_obra.total ?? 0;
+    composition.material += breakdown.material.total ?? 0;
+    composition.nao_discriminado += breakdown.nao_discriminado.total ?? 0;
   }
-  y = sectionWithPage(doc, y, 80, "Composição de custos", subtitle, "Indicadores para assembleia");
-  y = drawSectionTitle(doc, "Composição das propostas completas", y, width);
-  const costEntries = [["Mão de obra", costs.mao_obra], ["Material", costs.material], ["Não discriminado", costs.nao_discriminado]] as const;
-  const costGap = 8;
-  const costWidth = (width - 2 * MARGIN - costGap * 2) / 3;
-  costEntries.forEach(([label, value], i) => {
-    const x = MARGIN + i * (costWidth + costGap);
-    doc.roundedRect(x, y, costWidth, 40, 4).fill(C.paper);
-    doc.font("Helvetica-Bold").fontSize(7).fillColor(C.muted).text(label.toUpperCase(), x + 8, y + 7, { width: costWidth - 16 });
-    doc.font("Helvetica-Bold").fontSize(11).fillColor(C.ink).text(value.count ? formatCurrency(value.amount) : "—", x + 8, y + 19, { width: costWidth - 16 });
+  const hasComposition = comparable.length > 0;
+  doc.y = drawTable(doc, {
+    x: MARGIN,
+    y: doc.y,
+    width: CONTENT_WIDTH,
+    columns: [
+      { label: "Tipo de custo", width: 200 },
+      { label: "Valor", width: 130, align: "right" },
+    ],
+    rows: (["mao_obra", "material", "nao_discriminado"] as const).map((type) => ({
+      cells: [COST_TYPE_LABEL[type], hasComposition ? formatCurrency(composition[type]) : "—"],
+    })),
   });
-  y += 50;
+  doc.y += 6;
 
-  const byCondo = new Map<string, { count: number; potential: number; confirmed: number }>();
-  for (const entry of calculated) {
-    const name = entry.record.condominium || "Não informado";
-    const row = byCondo.get(name) ?? { count: 0, potential: 0, confirmed: 0 };
-    row.count++;
-    if (entry.metrics.isComparable) row.potential += entry.metrics.savings;
-    if (entry.actual !== null) row.confirmed += entry.actual;
-    byCondo.set(name, row);
+  sectionTitle(doc, "Mapas do período", "Clique no mapa no aplicativo para editar valores");
+  if (records.length === 0) {
+    paragraph(doc, "Nenhum mapa encontrado para os filtros selecionados.", { size: 8, color: MUTED });
+  } else {
+    doc.y = drawTable(doc, {
+      x: MARGIN,
+      y: doc.y,
+      width: CONTENT_WIDTH,
+      columns: [
+        { label: "Condomínio / objeto", width: 180 },
+        { label: "Data", width: 62 },
+        { label: "Status", width: 60 },
+        { label: "Potencial", width: 88, align: "right" },
+        { label: "Confirmada", width: 88, align: "right" },
+      ],
+      rows: records.map((entry) => ({
+        cells: [
+          `${entry.record.condominium || "Não informado"} — ${entry.record.service || entry.record.protocol}`,
+          formatDateBR(entry.record.analysisDate),
+          STATUS_LABEL[entry.record.status],
+          entry.metrics.isComparable ? formatCurrency(entry.metrics.savings) : "—",
+          formatCurrency(entry.recorded),
+        ],
+      })),
+    });
   }
-  y = sectionWithPage(doc, y, 50 + byCondo.size * 19, "Por condomínio", subtitle, "Indicadores para assembleia");
-  y = drawSectionTitle(doc, "Resultados por condomínio", y, width);
-  const condoHeader = () => {
-    const widths = [width * 0.48 - MARGIN, width * 0.12, width * 0.20, width * 0.20];
-    const labels = ["Condomínio / associação", "Mapas", "Potencial", "Confirmada"];
-    let x = MARGIN;
-    labels.forEach((label, i) => { doc.rect(x, y, widths[i], 18).fill(C.ink); doc.font("Helvetica-Bold").fontSize(6.7).fillColor(C.white).text(label, x + 5, y + 6, { width: widths[i] - 10, lineBreak: false }); x += widths[i]; });
-    y += 18;
-    return widths;
-  };
-  let condoWidths = condoHeader();
-  for (const [name, value] of [...byCondo.entries()].sort((a, b) => b[1].potential - a[1].potential)) {
-    if (y + 18 > doc.page.height - 50) { addNewPage(doc, "Indicadores para assembleia", "Resultados por condomínio — continuação"); y = doc.y; condoWidths = condoHeader(); }
-    const values = [safeText(name), String(value.count), formatCurrency(value.potential), formatCurrency(value.confirmed)];
-    let x = MARGIN;
-    values.forEach((text, i) => { doc.rect(x, y, condoWidths[i], 18).fill(i % 2 ? C.white : C.paper).strokeColor(C.line).lineWidth(0.3).stroke(); doc.font("Helvetica").fontSize(7).fillColor(C.text).text(text, x + 5, y + 6, { width: condoWidths[i] - 10, align: i === 0 ? "left" : "right", lineBreak: false, ellipsis: true }); x += condoWidths[i]; });
-    y += 18;
-  }
-  y += 7;
 
-  const tableWidths = [190, 76, 57, 65, 82, 82, width - 2 * MARGIN - 552];
-  const tableLabels = ["Condomínio", "Objeto", "Data", "Status", "Proposta completa", "Economia potencial", "Economia confirmada"];
-  const drawTableHeader = () => {
-    if (y + 18 > doc.page.height - 47) { addNewPage(doc, "Indicadores para assembleia", "Mapas do período — continuação"); y = doc.y; }
-    let x = MARGIN;
-    tableLabels.forEach((label, i) => { doc.rect(x, y, tableWidths[i], 22).fill(C.ink); doc.font("Helvetica-Bold").fontSize(6.2).fillColor(C.white).text(safeText(label), x + 3, y + 6, { width: tableWidths[i] - 6, height: 14, align: i >= 4 ? "right" : "left", ellipsis: true }); x += tableWidths[i]; });
-    y += 22;
-  };
-  y = sectionWithPage(doc, y, 45, "Mapas do período", subtitle, "Indicadores para assembleia");
-  y = drawSectionTitle(doc, "Mapas do período", y, width);
-  drawTableHeader();
-  for (const entry of calculated) {
-    const rowH = Math.max(22, textHeight(doc, entry.record.condominium, tableWidths[0] - 8, 6.8) + 8);
-    if (y + rowH > doc.page.height - 50) { addNewPage(doc, "Indicadores para assembleia", "Mapas do período — continuação"); y = doc.y; drawTableHeader(); }
-    const values = [safeText(entry.record.condominium), safeText(entry.record.service || entry.record.protocol), formatDateBR(entry.record.analysisDate), entry.record.status === "concluido" ? "Concluído" : entry.record.status === "rascunho" ? "Rascunho" : "Em análise", formatCurrency(entry.metrics.best?.total ?? null), entry.metrics.isComparable ? formatCurrency(entry.metrics.savings) : "—", formatCurrency(entry.actual)];
-    let x = MARGIN;
-    values.forEach((text, i) => { doc.rect(x, y, tableWidths[i], rowH).fill(C.white).strokeColor(C.line).lineWidth(0.3).stroke(); doc.font("Helvetica").fontSize(6.5).fillColor(C.text).text(text, x + 3, y + 6, { width: tableWidths[i] - 6, height: rowH - 6, align: i >= 4 ? "right" : "left", ellipsis: true }); x += tableWidths[i]; });
-    y += rowH;
-  }
-  const noteY = sectionWithPage(doc, y, 36, "Metodologia", subtitle, "Indicadores para assembleia");
-  doc.font("Helvetica").fontSize(6.8).fillColor(C.muted).text("Economia potencial = diferença entre a maior e a menor proposta que cobre todos os itens. Economia confirmada = valor de referência menos valor contratado, registrado e confirmado pela equipe. Estes indicadores apoiam a apresentação e não substituem apuração contábil de lucro.", MARGIN, noteY + 3, { width: width - 2 * MARGIN, lineGap: 1.5 });
-}
+  ensureSpace(doc, 40);
+  paragraph(doc, "Como ler: economia potencial compara a maior e a menor proposta com cobertura completa; economia confirmada usa o valor de referência e o valor contratado confirmados em mapas concluídos. Valores negativos indicam contratação acima da referência. Esses números não representam lucro contábil.", { size: 7, color: MUTED });
 
-export async function generateQuotationPdf(record: QuotationRecord): Promise<Buffer> {
-  return renderPdf(`Mapa de cotação ${record.protocol}`, (doc) => drawQuotationPdf(doc, record));
-}
-
-export async function generateIndicatorsPdf(records: QuotationRecord[], filters: { condominium: string; start: string; end: string }): Promise<Buffer> {
-  return renderPdf("Indicadores de cotações Gerencial", (doc) => drawDashboardPdf(doc, records, filters));
+  footer(doc, `${payload.condominium || "Todos os condomínios"} · ${periodLabel}`);
+  doc.end();
+  const buffer = await done;
+  return { buffer, fileName };
 }

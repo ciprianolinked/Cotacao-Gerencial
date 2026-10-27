@@ -1,13 +1,20 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { QuotationRecord } from "@/lib/types";
-import { computeMetrics, formatCurrency, formatDateBR, recordedSavings, supplierCostBreakdown } from "@/lib/quotation";
-import { downloadPdf } from "@/lib/client-download";
+import type { PdfExportRecord } from "@/lib/server/downloads";
+import { computeMetrics, formatCurrency, formatDateBR, formatDateTimeBR, recordedSavings, supplierCostBreakdown } from "@/lib/quotation";
+import { formatSize, saveBase64File, type PdfDownload } from "@/lib/download";
 import { ArrowLeftIcon, BuildingIcon, CheckIcon, DownloadIcon, FileIcon, PrinterIcon, TrendIcon } from "./icons";
 
-type Props = { records: QuotationRecord[]; condominiums: string[]; initialCondominium?: string; dbError?: boolean };
+type Props = {
+  records: QuotationRecord[];
+  condominiums: string[];
+  initialCondominium?: string;
+  initialDownloads?: PdfExportRecord[];
+  dbError?: boolean;
+};
 
 function monthLabel(month: string): string {
   const [year, number] = month.split("-");
@@ -22,13 +29,13 @@ function csvCell(value: unknown): string {
   return `"${safe.replace(/"/g, '""')}"`;
 }
 
-export function IndicatorsDashboard({ records, condominiums, initialCondominium = "", dbError }: Props) {
+export function IndicatorsDashboard({ records, condominiums, initialCondominium = "", initialDownloads = [], dbError }: Props) {
   const [condominium, setCondominium] = useState(initialCondominium);
   const [start, setStart] = useState("");
   const [end, setEnd] = useState("");
-  const [downloadingPdf, setDownloadingPdf] = useState(false);
-  const [downloadError, setDownloadError] = useState<string | null>(null);
-  const [downloadMessage, setDownloadMessage] = useState<string | null>(null);
+  const [downloads, setDownloads] = useState<PdfExportRecord[]>(initialDownloads);
+  const [pdfBusy, setPdfBusy] = useState(false);
+  const [pdfMessage, setPdfMessage] = useState<{ type: "error" | "success"; text: string } | null>(null);
   const availableCondos = [...new Set([...condominiums, ...records.map((record) => record.condominium).filter(Boolean)])].sort((a, b) => a.localeCompare(b, "pt-BR"));
   const filtered = useMemo(() => records.filter((record) =>
     (!condominium || record.condominium === condominium) && (!start || record.analysisDate >= start) && (!end || record.analysisDate <= end),
@@ -73,22 +80,34 @@ export function IndicatorsDashboard({ records, condominiums, initialCondominium 
   const condoRows = [...byCondo.entries()].sort((a, b) => b[1].potential - a[1].potential || a[0].localeCompare(b[0], "pt-BR"));
   const periodLabel = `${start ? formatDateBR(start) : "Início"} a ${end ? formatDateBR(end) : "hoje"}`;
 
-  async function downloadDashboardPdf() {
-    setDownloadingPdf(true);
-    setDownloadError(null);
-    setDownloadMessage(null);
+  async function refreshDownloads() {
     try {
-      const params = new URLSearchParams();
-      if (condominium) params.set("condominio", condominium);
-      if (start) params.set("inicio", start);
-      if (end) params.set("fim", end);
-      const suffix = params.size ? `?${params.toString()}` : "";
-      const fileName = await downloadPdf(`/api/indicadores/pdf${suffix}`, "indicadores-gerencial.pdf");
-      setDownloadMessage(`PDF baixado: ${fileName}`);
+      const response = await fetch("/api/downloads");
+      const data = await response.json() as { exports?: PdfExportRecord[] };
+      if (Array.isArray(data.exports)) setDownloads(data.exports);
+    } catch {
+      /* mantém a lista atual */
+    }
+  }
+
+  async function downloadPdf() {
+    setPdfBusy(true);
+    setPdfMessage(null);
+    try {
+      const response = await fetch("/api/indicadores/pdf", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ condominium, start, end }),
+      });
+      const data = await response.json() as PdfDownload & { error?: string };
+      if (!response.ok || !data.fileBase64) throw new Error(data.error || "Não foi possível gerar o PDF.");
+      saveBase64File(data.fileName, data.fileBase64);
+      setPdfMessage({ type: "success", text: `Download concluído: ${data.fileName}${data.recorded ? " · registrado no histórico" : ""}` });
+      await refreshDownloads();
     } catch (error) {
-      setDownloadError(error instanceof Error ? error.message : "Não foi possível baixar o PDF.");
+      setPdfMessage({ type: "error", text: error instanceof Error ? error.message : "Não foi possível gerar o PDF." });
     } finally {
-      setDownloadingPdf(false);
+      setPdfBusy(false);
     }
   }
 
@@ -109,11 +128,14 @@ export function IndicatorsDashboard({ records, condominiums, initialCondominium 
       <Link href="/" className="no-print inline-flex items-center gap-1.5 text-[11px] font-semibold text-slate-500 hover:text-ink"><ArrowLeftIcon className="h-3.5 w-3.5" /> Voltar ao painel</Link>
       <div className="mt-3 flex flex-wrap items-end justify-between gap-4">
         <div><p className="text-[10px] font-bold uppercase tracking-[0.16em] text-brand-dark">Governança em números</p><h1 className="font-display mt-1 text-[30px] leading-tight text-ink sm:text-[34px]">Indicadores para assembleia</h1><p className="mt-1 text-[13px] text-slate-500">Uma visão clara das cotações e dos resultados registrados.</p></div>
-        <div className="no-print flex flex-wrap gap-2"><button type="button" onClick={downloadCsv} className="btn btn-ghost"><FileIcon /> Baixar CSV</button><button type="button" onClick={downloadDashboardPdf} disabled={downloadingPdf || Boolean(start && end && start > end)} className="btn btn-brand"><DownloadIcon /> {downloadingPdf ? "Gerando PDF…" : "Baixar PDF"}</button><button type="button" onClick={() => window.print()} className="btn btn-ghost"><PrinterIcon /> Imprimir</button></div>
+        <div className="no-print flex flex-wrap gap-2">
+          <button type="button" onClick={downloadCsv} className="btn btn-ghost"><FileIcon /> Baixar CSV</button>
+          <button type="button" onClick={downloadPdf} disabled={pdfBusy} className="btn btn-primary"><DownloadIcon /> {pdfBusy ? "Gerando PDF…" : "Baixar PDF"}</button>
+          <button type="button" onClick={() => window.print()} className="btn btn-ghost"><PrinterIcon /> Imprimir</button>
+        </div>
       </div>
       {dbError && <p className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-[12px] font-semibold text-amber-800">Não foi possível carregar os dados. Confira a conexão e atualize a página.</p>}
-      {downloadError && <p role="alert" className="no-print mt-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-[12px] font-semibold text-red-700">{downloadError}</p>}
-      {downloadMessage && <p role="status" className="no-print mt-3 rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-[12px] font-semibold text-green-800">{downloadMessage}</p>}
+      {pdfMessage && <div role="status" className={`no-print mt-4 rounded-xl px-4 py-3 text-[12px] font-semibold ${pdfMessage.type === "success" ? "border border-green-200 bg-green-50 text-green-800" : "border border-red-200 bg-red-50 text-red-700"}`}>{pdfMessage.text}</div>}
       <section className="no-print card mt-5 flex flex-wrap items-end gap-3 px-4 py-3.5 sm:px-5">
         <label className="min-w-[200px] flex-1"><span className="label">Condomínio</span><select className="field mt-1" value={condominium} onChange={(event) => setCondominium(event.target.value)}><option value="">Todos os condomínios</option>{availableCondos.map((name) => <option key={name} value={name}>{name}</option>)}</select></label>
         <label><span className="label">Data inicial</span><input type="date" className="field mt-1" value={start} onChange={(event) => setStart(event.target.value)} /></label>
@@ -150,6 +172,24 @@ export function IndicatorsDashboard({ records, condominiums, initialCondominium 
         <div className="mt-3 grid gap-2 sm:grid-cols-3">{([
           ["mao_obra", "Mão de obra"], ["material", "Material"], ["nao_discriminado", "Não discriminado"],
         ] as const).map(([type, label]) => <div key={type} className="rounded-xl bg-paper px-3 py-2.5"><p className="text-[10px] font-bold text-slate-500">{label}</p><p className="mt-1 text-[14px] font-extrabold text-ink">{costTotals[type].count ? formatCurrency(costTotals[type].amount) : "—"}</p></div>)}</div>
+      </section>
+
+      <section className="card mt-4 break-inside-avoid overflow-hidden">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-5 py-4">
+          <div><p className="text-[10px] font-bold uppercase tracking-[0.15em] text-brand-dark">Downloads</p><h2 className="mt-1 text-[15px] font-extrabold text-ink">Histórico de arquivos PDF</h2><p className="mt-1 text-[11px] text-slate-500">Nome do arquivo registrado a cada download gerado.</p></div>
+          <button type="button" onClick={refreshDownloads} className="btn btn-ghost !py-1.5">Atualizar lista</button>
+        </div>
+        {downloads.length === 0 ? <p className="px-5 py-6 text-center text-[12px] text-slate-500">Nenhum download ainda. Os arquivos gerados aparecem aqui com data e tamanho.</p> : (
+          <ul className="divide-y divide-line">
+            {downloads.map((item) => (
+              <li key={item.id} className="flex flex-wrap items-center gap-3 px-5 py-3">
+                <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-brand-soft text-brand-dark"><DownloadIcon className="h-4 w-4" /></span>
+                <span className="min-w-[220px] flex-1"><span className="block truncate text-[11.5px] font-bold text-ink" title={item.fileName}>{item.fileName}</span><span className="block text-[10px] text-slate-500">{item.kind === "mapa" ? "Mapa de cotação" : "Indicadores"}{item.condominium ? ` · ${item.condominium}` : ""} · {formatDateTimeBR(item.createdAt)}</span></span>
+                <span className="text-[10.5px] font-semibold text-slate-500">{formatSize(item.sizeBytes)}</span>
+              </li>
+            ))}
+          </ul>
+        )}
       </section>
 
       <section className="card mt-4 overflow-hidden break-inside-avoid"><div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-5 py-4"><div><p className="text-[10px] font-bold uppercase tracking-[0.15em] text-brand-dark">Detalhamento</p><h2 className="mt-1 text-[15px] font-extrabold text-ink">Mapas do período</h2></div><span className="text-[10.5px] text-slate-500">Clique no mapa para editar os valores</span></div>

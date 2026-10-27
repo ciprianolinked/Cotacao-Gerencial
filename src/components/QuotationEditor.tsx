@@ -27,16 +27,16 @@ import {
   todayISO,
 } from "@/lib/quotation";
 import { mergeExtraction } from "@/lib/extraction";
-import { downloadPdf } from "@/lib/client-download";
+import { saveBase64File, type PdfDownload } from "@/lib/download";
 import { MapDocument } from "./MapDocument";
 import { AiImportPanel, type AiFileMeta } from "./AiImportPanel";
 import {
   ArrowLeftIcon,
   ArrowRightIcon,
-  DownloadIcon,
   BuildingIcon,
   CheckIcon,
   CloseIcon,
+  DownloadIcon,
   FileIcon,
   PlusIcon,
   PrinterIcon,
@@ -62,11 +62,11 @@ export function QuotationEditor({ initial, quotationId, protocol: initialProtoco
   const [protocol, setProtocol] = useState(initialProtocol ?? "MC-••••-••••");
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [downloadingPdf, setDownloadingPdf] = useState(false);
   const [feedback, setFeedback] = useState<Feedback>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [aiOpen, setAiOpen] = useState(!quotationId);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [downloading, setDownloading] = useState(false);
 
   const metrics = useMemo(() => computeMetrics(draft), [draft]);
 
@@ -227,17 +227,21 @@ export function QuotationEditor({ initial, quotationId, protocol: initialProtoco
     window.open(`/mapas/${targetId}/imprimir`, "_blank", "noopener,noreferrer");
   }
 
-  async function handleDownloadPdf() {
+  async function handlePdfDownload() {
     const targetId = dirty || !id ? await persist() : id;
     if (!targetId) return;
-    setDownloadingPdf(true);
+    setDownloading(true);
+    setFeedback({ tone: "ok", message: "Gerando o PDF do mapa…" });
     try {
-      const fileName = await downloadPdf(`/api/quotations/${targetId}/pdf`, "mapa-cotacao.pdf");
-      setFeedback({ tone: "ok", message: `PDF baixado: ${fileName}` });
+      const response = await fetch(`/api/quotations/${targetId}/pdf`);
+      const data = await response.json() as PdfDownload & { error?: string };
+      if (!response.ok || !data.fileBase64) throw new Error(data.error || "Não foi possível gerar o PDF.");
+      saveBase64File(data.fileName, data.fileBase64);
+      setFeedback({ tone: "ok", message: `Download concluído: ${data.fileName}${data.recorded ? " · registrado no histórico" : ""}` });
     } catch (error) {
-      setFeedback({ tone: "error", message: error instanceof Error ? error.message : "Não foi possível baixar o PDF." });
+      setFeedback({ tone: "error", message: error instanceof Error ? error.message : "Não foi possível gerar o PDF." });
     } finally {
-      setDownloadingPdf(false);
+      setDownloading(false);
     }
   }
 
@@ -317,15 +321,16 @@ export function QuotationEditor({ initial, quotationId, protocol: initialProtoco
               <FileIcon className="h-4 w-4" />
               <span className="hidden sm:inline">Ver documento</span>
             </button>
-            <button type="button" onClick={handlePrint} className="btn btn-ghost" disabled={saving || downloadingPdf}>
+            <button type="button" onClick={handlePdfDownload} className="btn btn-ghost" disabled={saving || downloading}>
+              <DownloadIcon className="h-4 w-4" />
+              <span className="hidden sm:inline">{downloading ? "Gerando…" : "Baixar PDF"}</span>
+              <span className="sm:hidden">PDF</span>
+            </button>
+            <button type="button" onClick={handlePrint} className="btn btn-ghost" disabled={saving}>
               <PrinterIcon className="h-4 w-4" />
               <span className="hidden sm:inline">Imprimir</span>
             </button>
-            <button type="button" onClick={handleDownloadPdf} className="btn btn-brand" disabled={saving || downloadingPdf}>
-              <DownloadIcon className="h-4 w-4" />
-              {downloadingPdf ? "Gerando PDF…" : "Baixar PDF"}
-            </button>
-            <button type="button" onClick={() => persist()} className="btn btn-primary" disabled={saving || downloadingPdf}>
+            <button type="button" onClick={() => persist()} className="btn btn-primary" disabled={saving}>
               <SaveIcon className="h-4 w-4" />
               {saving ? "Salvando…" : "Salvar"}
             </button>
@@ -937,13 +942,13 @@ export function QuotationEditor({ initial, quotationId, protocol: initialProtoco
                   <FileIcon className="h-4 w-4" />
                   Pré-visualizar documento
                 </button>
-                <button type="button" onClick={handleDownloadPdf} className="btn btn-brand w-full !justify-start" disabled={saving || downloadingPdf}>
+                <button type="button" onClick={handlePdfDownload} className="btn btn-brand w-full !justify-start" disabled={saving || downloading}>
                   <DownloadIcon className="h-4 w-4" />
-                  {downloadingPdf ? "Gerando PDF…" : "Baixar PDF do mapa"}
+                  {downloading ? "Gerando PDF…" : "Baixar PDF do mapa"}
                 </button>
-                <button type="button" onClick={handlePrint} className="btn btn-ghost w-full !justify-start" disabled={saving || downloadingPdf}>
+                <button type="button" onClick={handlePrint} className="btn btn-ghost w-full !justify-start" disabled={saving}>
                   <PrinterIcon className="h-4 w-4" />
-                  Pré-visualizar impressão
+                  Imprimir no navegador
                 </button>
                 <button
                   type="button"
@@ -1014,9 +1019,13 @@ export function QuotationEditor({ initial, quotationId, protocol: initialProtoco
               </span>
             </div>
             <div className="flex items-center gap-2">
-              <button type="button" onClick={() => window.print()} className="btn btn-brand">
+              <button type="button" onClick={handlePdfDownload} className="btn btn-brand" disabled={downloading}>
+                <DownloadIcon className="h-4 w-4" />
+                {downloading ? "Gerando PDF…" : "Baixar PDF"}
+              </button>
+              <button type="button" onClick={() => window.print()} className="btn bg-white/10 text-white hover:bg-white/20">
                 <PrinterIcon className="h-4 w-4" />
-                Imprimir / PDF
+                Imprimir
               </button>
               <button
                 type="button"
