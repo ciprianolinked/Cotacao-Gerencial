@@ -9,17 +9,12 @@ type CondoWithCount = CondominiumRecord & { mapCount: number };
 type FormState = { name: string; city: string; manager: string; contactEmail: string };
 const blank: FormState = { name: "", city: "", manager: "", contactEmail: "" };
 
-function formFor(item: CondoWithCount | undefined): FormState {
-  return item ? { name: item.name, city: item.city ?? "", manager: item.manager ?? "", contactEmail: item.contactEmail ?? "" } : blank;
-}
-
-export function CondominiumsManager({ initial, dbError, initialEditingId }: { initial: CondoWithCount[]; dbError?: boolean; initialEditingId?: string }) {
-  const initialSelected = initial.find((item) => item.id === initialEditingId);
+export function CondominiumsManager({ initial, dbError }: { initial: CondoWithCount[]; dbError?: boolean }) {
   const [items, setItems] = useState(initial);
   const [query, setQuery] = useState("");
-  const [editingId, setEditingId] = useState<string | null>(initialSelected?.id ?? null);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
-  const [form, setForm] = useState<FormState>(() => formFor(initialSelected));
+  const [form, setForm] = useState<FormState>(blank);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ type: "error" | "success"; text: string } | null>(null);
   const search = query.trim().toLocaleLowerCase("pt-BR");
@@ -111,7 +106,7 @@ export function CondominiumsManager({ initial, dbError, initialEditingId }: { in
               {filtered.map((item) => (
                 <li key={item.id} className={`flex flex-wrap items-center gap-3 px-5 py-4 transition hover:bg-paper/60 ${editingId === item.id ? "bg-brand-soft/40" : ""}`}>
                   <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-ink text-brand"><BuildingIcon className="h-5 w-5" /></span>
-                  <div className="min-w-[180px] flex-1"><button type="button" onClick={() => startEdit(item)} className="text-left text-[13px] font-extrabold text-ink underline decoration-transparent underline-offset-2 transition hover:text-brand-dark hover:decoration-brand" title={`Abrir cadastro de ${item.name}`}>{item.name}</button><p className="mt-0.5 text-[11px] text-slate-500">{[item.city, item.manager].filter(Boolean).join(" · ") || "Cidade e responsável não informados"}</p></div>
+                  <div className="min-w-[180px] flex-1"><p className="text-[13px] font-extrabold text-ink">{item.name}</p><p className="mt-0.5 text-[11px] text-slate-500">{[item.city, item.manager].filter(Boolean).join(" · ") || "Cidade e responsável não informados"}</p></div>
                   <span className="rounded-full bg-paper px-2.5 py-1 text-[10px] font-bold text-slate-500">{item.mapCount} mapa(s)</span>
                   <button type="button" onClick={() => startEdit(item)} className="btn btn-ghost !px-3 !py-1.5">Editar <ArrowRightIcon className="h-3.5 w-3.5" /></button>
                 </li>

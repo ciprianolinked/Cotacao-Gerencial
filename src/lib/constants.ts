@@ -51,11 +51,11 @@ export const KIND_LABEL: Record<QuotationKind, string> = {
   produtos: "Produtos",
 };
 
-// Compatibilidade com telas antigas do painel que importam o rótulo da natureza.
-export const NATURE_LABEL: Record<QuotationKind, string> = {
-  servico: "Serviço",
-  produtos: "Produtos",
-};
+/**
+ * Rótulo da natureza da cotação. Alias de KIND_LABEL, mantido por compatibilidade
+ * com implementações que indexam por string.
+ */
+export const NATURE_LABEL: Record<string, string> = KIND_LABEL;
 
 export const MAX_SUPPLIERS = 5;
 export const MAX_FILES = 6;

@@ -41,16 +41,4 @@ CREATE TABLE IF NOT EXISTS "app_settings" (
   "updated_at" timestamp with time zone NOT NULL DEFAULT now()
 );
 
-CREATE TABLE IF NOT EXISTS "document_downloads" (
-  "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  "document_type" text NOT NULL,
-  "file_name" text NOT NULL,
-  "quotation_id" uuid REFERENCES "quotations"("id") ON DELETE SET NULL,
-  "filters" jsonb NOT NULL DEFAULT '{}'::jsonb,
-  "downloaded_at" timestamp with time zone NOT NULL DEFAULT now()
-);
-
-CREATE INDEX IF NOT EXISTS "document_downloads_date_idx" ON "document_downloads" ("downloaded_at");
-CREATE INDEX IF NOT EXISTS "document_downloads_quotation_idx" ON "document_downloads" ("quotation_id");
-
 COMMIT;
