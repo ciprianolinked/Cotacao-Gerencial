@@ -11,11 +11,15 @@ export type Supplier = {
   notes: string;
 };
 
+/** Natureza do item: separa o que é material do que é mão de obra. */
+export type ItemNature = "material" | "mao_de_obra" | "outros";
+
 export type QuoteItem = {
   id: string;
   description: string;
   unit: string;
   quantity: number;
+  nature: ItemNature;
   prices: Record<string, number | null>;
 };
 

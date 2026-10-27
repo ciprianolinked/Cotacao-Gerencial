@@ -230,19 +230,23 @@ export default async function HomePage() {
             value={String(records.length)}
             hint={`${completed} concluído(s) · ${inAnalysis} em análise`}
           />
-          <StatCard
-            icon={<TrendIcon className="h-4 w-4" />}
-            label="Economia apurada"
-            value={formatCompactCurrency(totalSavings)}
-            hint="Somatório das diferenças entre propostas"
-            tone="gold"
-          />
-          <StatCard
-            icon={<BuildingIcon className="h-4 w-4" />}
-            label="Condomínios atendidos"
-            value={String(condominiums.length)}
-            hint="Associações e condomínios com processo ativo"
-          />
+          <Link href="/dashboard" className="transition hover:-translate-y-0.5">
+            <StatCard
+              icon={<TrendIcon className="h-4 w-4" />}
+              label="Economia apurada"
+              value={formatCompactCurrency(totalSavings)}
+              hint="Clique para ver os indicadores da assembleia"
+              tone="gold"
+            />
+          </Link>
+          <Link href="/condominios" className="transition hover:-translate-y-0.5">
+            <StatCard
+              icon={<BuildingIcon className="h-4 w-4" />}
+              label="Condomínios atendidos"
+              value={String(condominiums.length)}
+              hint="Clique para cadastrar ou editar os condomínios"
+            />
+          </Link>
           <StatCard
             icon={<SparklesIcon className="h-4 w-4" />}
             label="Leitura com IA"
@@ -314,23 +318,31 @@ export default async function HomePage() {
                   </li>
                 )}
                 {condominiums.map((condominium) => (
-                  <li key={condominium.id} className="flex items-center justify-between gap-2 px-4 py-2.5">
-                    <div className="min-w-0">
-                      <p className="truncate text-[12px] font-bold text-ink">{condominium.name}</p>
-                      <p className="truncate text-[10px] text-slate-500">
-                        {condominium.city ?? "Cidade não informada"}
-                        {condominium.manager ? ` · ${condominium.manager}` : ""}
-                      </p>
-                    </div>
-                    <span className="shrink-0 rounded-full bg-paper px-2 py-0.5 text-[10px] font-bold text-slate-500">
-                      {condominiumCounts.get(condominium.name) ?? 0} mapa(s)
-                    </span>
+                  <li key={condominium.id}>
+                    <Link
+                      href="/condominios"
+                      className="flex items-center justify-between gap-2 px-4 py-2.5 transition hover:bg-brand-soft/40"
+                    >
+                      <div className="min-w-0">
+                        <p className="truncate text-[12px] font-bold text-ink">{condominium.name}</p>
+                        <p className="truncate text-[10px] text-slate-500">
+                          {condominium.city ?? "Cidade não informada"}
+                          {condominium.manager ? ` · ${condominium.manager}` : ""}
+                        </p>
+                      </div>
+                      <span className="shrink-0 rounded-full bg-paper px-2 py-0.5 text-[10px] font-bold text-slate-500">
+                        {condominiumCounts.get(condominium.name) ?? 0} mapa(s)
+                      </span>
+                    </Link>
                   </li>
                 ))}
               </ul>
-              <div className="border-t border-line px-4 py-2.5">
-                <Link href="/mapas/novo" className="text-[11px] font-bold text-brand-dark hover:underline">
-                  + Novo condomínio na próxima cotação
+              <div className="flex items-center justify-between gap-2 border-t border-line px-4 py-2.5">
+                <Link href="/condominios" className="text-[11px] font-bold text-brand-dark hover:underline">
+                  Gerenciar condomínios →
+                </Link>
+                <Link href="/dashboard" className="text-[11px] font-bold text-slate-500 hover:text-ink hover:underline">
+                  Indicadores
                 </Link>
               </div>
             </section>

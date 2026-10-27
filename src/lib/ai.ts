@@ -1,6 +1,6 @@
 import { ACCEPTED_UPLOAD_TYPES, CATEGORIES, MAX_FILES, MAX_FILE_BYTES } from "./constants";
 import type { AiExtractionResult, QuotationKind, QuoteItem, Supplier } from "./types";
-import { round2, todayISO, uid } from "./quotation";
+import { normalizeNature, round2, todayISO, uid } from "./quotation";
 import { getGeminiKey } from "./server/quotations";
 import { createGeminiInteraction, resolveGeminiModel, type GeminiInputPart } from "./server/gemini";
 
@@ -38,6 +38,7 @@ type RawSupplier = {
 type RawItem = {
   description?: string;
   unit?: string;
+  nature?: string;
   quantity?: number | null;
   prices?: (number | string | null)[];
 };
@@ -99,6 +100,11 @@ Regras obrigatórias:
 3. Para cada item, informe "prices": um array de números na MESMA ORDEM dos fornecedores listados. Use null quando o fornecedor não cotou o item. Informe o valor UNITÁRIO em reais, sem símbolo e usando ponto decimal.
 4. Quando o documento trouxer apenas o total por fornecedor, distribua o total no item de maior representatividade (ou em item único "Fornecimento global conforme escopo").
 5. "quantity" deve ser numérica (default 1). Unidades comuns: un, serviço, mês, m², m, kg, L, cx, hora, vb (verba).
+5.1. OBRIGATÓRIO: classifique cada item em "nature" com um destes valores:
+   - "material": peças, insumos e equipamentos fornecidos (tubos, cabos, tintas, bombas, filtros, disjuntores).
+   - "mao_de_obra": execução, instalação, montagem, visita técnica, hora técnica, diária, manutenção e serviços em geral.
+   - "outros": quando não for possível separar (ex.: frete, taxas, ART, verba global, "material e mão de obra inclusos").
+5.2. Quando a proposta apresentar material e mão de obra separados para o mesmo escopo (ex.: "Instalação de bomba — material R$ 800 / mão de obra R$ 400"), crie DOIS itens distintos, um com nature "material" e outro com nature "mao_de_obra", para permitir o comparativo correto.
 6. Classifique "kind" como "servico" ou "produtos" conforme a natureza predominante.
 7. Classifique "category" escolhendo exatamente uma das opções: ${CATEGORIES.join(" | ")}.
 8. Extraia condições comerciais: prazo de entrega/execução, condições de pagamento, validade da proposta e contato.
@@ -148,10 +154,11 @@ const RAW_SCHEMA = {
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["description"],
+        required: ["description", "nature"],
         properties: {
           description: { type: "string" },
           unit: { type: "string" },
+          nature: { type: "string", enum: ["material", "mao_de_obra", "outros"] },
           quantity: { type: ["number", "null"] },
           prices: { type: "array", items: { type: ["number", "null"] } },
         },
@@ -336,11 +343,15 @@ function mapRaw(raw: RawExtraction, hints: ExtractionHints, mode: AiExtractionRe
       prices[supplier.id] = parsed !== null && Number.isFinite(parsed) ? round2(parsed) : null;
     });
     const quantity = typeof item.quantity === "number" && Number.isFinite(item.quantity) ? item.quantity : 1;
+    const description = (item.description || `Item ${itemIndex + 1}`).trim().slice(0, 600);
+    const unit = normalizeUnit(item.unit);
     return {
       id: `itm_${itemIndex}_${uid()}`,
-      description: (item.description || `Item ${itemIndex + 1}`).trim().slice(0, 600),
-      unit: normalizeUnit(item.unit),
+      description,
+      unit,
       quantity: quantity > 0 ? quantity : 1,
+      // A IA classifica; se vier vazio ou inválido, deduzimos pela descrição.
+      nature: normalizeNature(item.nature, description, unit),
       prices,
     };
   });
@@ -370,6 +381,7 @@ function mapRaw(raw: RawExtraction, hints: ExtractionHints, mode: AiExtractionRe
               description: "Fornecimento global conforme escopo apresentado",
               unit: "vb (verba)",
               quantity: 1,
+              nature: "outros" as const,
               prices: Object.fromEntries(safeSuppliers.map((supplier) => [supplier.id, null])),
             },
           ],

@@ -6,6 +6,7 @@ import {
   itemTotal,
   lowestPriceForItem,
 } from "@/lib/quotation";
+import { NATURE_LABEL, NATURE_SHORT } from "@/lib/constants";
 import { BrandLogo } from "./BrandLogo";
 
 type MapDocumentProps = {
@@ -101,6 +102,7 @@ export function MapDocument({ draft, protocol, generatedAt }: MapDocumentProps) 
                 <th>Descrição do item / escopo</th>
                 <th className="w-[42px] text-center">Qtd</th>
                 <th className="w-[46px]">Un.</th>
+              <th className="w-[44px]">Nat.</th>
                 {suppliers.map((supplier) => (
                   <th key={supplier.id} className="num w-[92px]">
                     {supplier.name.trim() || "Fornecedor"}
@@ -117,6 +119,7 @@ export function MapDocument({ draft, protocol, generatedAt }: MapDocumentProps) 
                     <td className="font-medium">{item.description || "Item sem descrição"}</td>
                     <td className="num text-center">{item.quantity || "—"}</td>
                     <td className="text-slate-600">{item.unit}</td>
+                  <td className="text-slate-600">{NATURE_SHORT[item.nature]}</td>
                     {suppliers.map((supplier) => {
                       const value = item.prices?.[supplier.id] ?? null;
                       const isBest = value !== null && lowest !== null && Math.abs(value - lowest) < 0.005;
@@ -129,8 +132,22 @@ export function MapDocument({ draft, protocol, generatedAt }: MapDocumentProps) 
                   </tr>
                 );
               })}
+              {(["material", "mao_de_obra"] as const)
+                .filter((nature) => suppliers.some((supplier) => natureTotal(rows, supplier.id, nature) > 0))
+                .map((nature) => (
+                  <tr key={nature}>
+                    <td colSpan={5} className="!bg-[#f6f5ef] text-right text-[9px] font-bold uppercase tracking-[0.1em] text-slate-600">
+                      Subtotal · {NATURE_LABEL[nature]}
+                    </td>
+                    {suppliers.map((supplier) => (
+                      <td key={supplier.id} className="num !bg-[#f6f5ef] text-[10px] font-bold text-ink">
+                        {formatCurrency(natureTotal(rows, supplier.id, nature) || null)}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
               <tr>
-                <td colSpan={4} className="!bg-ink !text-white text-right text-[9px] font-bold uppercase tracking-[0.12em]">
+                <td colSpan={5} className="!bg-ink !text-white text-right text-[9px] font-bold uppercase tracking-[0.12em]">
                   Total geral da proposta
                 </td>
                 {suppliers.map((supplier) => {
@@ -289,6 +306,21 @@ export function MapDocument({ draft, protocol, generatedAt }: MapDocumentProps) 
       </div>
     </article>
   );
+}
+
+/** Soma de uma natureza (material ou mão de obra) para um fornecedor. */
+function natureTotal(
+  items: QuotationDraft["items"],
+  supplierId: string,
+  nature: QuotationDraft["items"][number]["nature"],
+): number {
+  let total = 0;
+  for (const item of items) {
+    if (item.nature !== nature) continue;
+    const value = itemTotal(item, supplierId);
+    if (value !== null) total += value;
+  }
+  return Math.round(total * 100) / 100;
 }
 
 function itemTotalSummary(items: QuotationDraft["items"], supplierId: string): number | null {

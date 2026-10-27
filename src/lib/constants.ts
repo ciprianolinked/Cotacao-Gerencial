@@ -1,4 +1,25 @@
-import type { QuotationKind, QuotationStatus } from "./types";
+import type { ItemNature, QuotationKind, QuotationStatus } from "./types";
+
+export const NATURE_LABEL: Record<ItemNature, string> = {
+  material: "Material",
+  mao_de_obra: "Mão de obra",
+  outros: "Outros",
+};
+
+/** Rótulo curto para caber nas colunas da tabela e do documento. */
+export const NATURE_SHORT: Record<ItemNature, string> = {
+  material: "Mat.",
+  mao_de_obra: "M.O.",
+  outros: "Outro",
+};
+
+export const NATURE_STYLE: Record<ItemNature, string> = {
+  material: "bg-sky-50 text-sky-700 ring-sky-200",
+  mao_de_obra: "bg-violet-50 text-violet-700 ring-violet-200",
+  outros: "bg-slate-100 text-slate-600 ring-slate-200",
+};
+
+export const NATURE_VALUES: ItemNature[] = ["material", "mao_de_obra", "outros"];
 
 export const CATEGORIES = [
   "Manutenção predial",

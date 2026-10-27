@@ -30,7 +30,13 @@ export function AppShell({ children }: { children: ReactNode }) {
                 Mapas de cotação
               </Link>
               <Link
-                href="/#condominios"
+                href="/dashboard"
+                className="rounded-lg px-3 py-2 text-[13px] font-semibold text-white/75 transition hover:bg-white/10 hover:text-white"
+              >
+                Indicadores
+              </Link>
+              <Link
+                href="/condominios"
                 className="rounded-lg px-3 py-2 text-[13px] font-semibold text-white/75 transition hover:bg-white/10 hover:text-white"
               >
                 Condomínios

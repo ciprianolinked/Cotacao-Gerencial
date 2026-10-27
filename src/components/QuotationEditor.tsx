@@ -6,15 +6,26 @@ import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import type {
   AiExtractionResult,
+  ItemNature,
   QuotationDraft,
   QuotationStatus,
   QuoteItem,
   Supplier,
 } from "@/lib/types";
-import { CATEGORIES, MAX_SUPPLIERS, STATUS_LABEL, STATUS_STYLE, UNITS } from "@/lib/constants";
+import {
+  CATEGORIES,
+  MAX_SUPPLIERS,
+  NATURE_LABEL,
+  NATURE_STYLE,
+  NATURE_VALUES,
+  STATUS_LABEL,
+  STATUS_STYLE,
+  UNITS,
+} from "@/lib/constants";
 import {
   buildNarrative,
   computeMetrics,
+  inferNature,
   createItem,
   createSupplier,
   formatBytes,
@@ -61,8 +72,47 @@ export function QuotationEditor({ initial, quotationId, protocol: initialProtoco
   const [previewOpen, setPreviewOpen] = useState(false);
   const [aiOpen, setAiOpen] = useState(!quotationId);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  // Itens cuja natureza foi escolhida à mão: não sobrescrevemos a escolha.
+  const [naturePinned, setNaturePinned] = useState<Set<string>>(() => new Set());
+  // Enquanto o parecer não for editado manualmente, ele acompanha os valores.
+  const [analysisTouched, setAnalysisTouched] = useState(
+    () => Boolean(initial.analysis.summary.trim() || initial.analysis.recommendation.trim()),
+  );
 
   const metrics = useMemo(() => computeMetrics(draft), [draft]);
+
+  // Assinatura dos dados que influenciam o parecer automático.
+  const analysisKey = useMemo(
+    () =>
+      JSON.stringify({
+        service: draft.service,
+        kind: draft.kind,
+        condominium: draft.condominium,
+        suppliers: draft.suppliers.map((supplier) => [supplier.id, supplier.name]),
+        items: draft.items.map((item) => [item.nature, item.quantity, item.prices]),
+      }),
+    [draft],
+  );
+
+  // Mantém "Resumo do comparativo" e a recomendação sempre em dia com as propostas.
+  useEffect(() => {
+    if (analysisTouched) return;
+    const narrative = buildNarrative(draft);
+    setDraft((current) => {
+      if (
+        current.analysis.summary === narrative.summary &&
+        current.analysis.recommendation === narrative.recommendation
+      ) {
+        return current;
+      }
+      return {
+        ...current,
+        analysis: { ...current.analysis, summary: narrative.summary, recommendation: narrative.recommendation },
+      };
+    });
+    // Recalcula apenas quando os números ou o escopo mudam.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [analysisKey, analysisTouched]);
 
   useEffect(() => {
     if (!dirty) return;
@@ -121,6 +171,9 @@ export function QuotationEditor({ initial, quotationId, protocol: initialProtoco
   }
 
   function updateItem(itemId: string, patch: Partial<QuoteItem>) {
+    if (patch.nature !== undefined) {
+      setNaturePinned((current) => new Set(current).add(itemId));
+    }
     setDraft((current) => ({
       ...current,
       items: current.items.map((item) => (item.id === itemId ? { ...item, ...patch } : item)),
@@ -153,6 +206,7 @@ export function QuotationEditor({ initial, quotationId, protocol: initialProtoco
   }
 
   function regenerateAnalysis() {
+    setAnalysisTouched(false);
     const narrative = buildNarrative(draft);
     setDraft((current) => ({
       ...current,
@@ -166,6 +220,8 @@ export function QuotationEditor({ initial, quotationId, protocol: initialProtoco
   }
 
   function applyExtraction(result: AiExtractionResult, files: AiFileMeta[]) {
+    setNaturePinned(new Set());
+    setAnalysisTouched(true);
     setDraft((current) => mergeExtraction(current, result, files));
     setDirty(true);
     setFeedback({
@@ -585,6 +641,9 @@ export function QuotationEditor({ initial, quotationId, protocol: initialProtoco
                       <th className="w-[92px] bg-paper px-1.5 py-2 text-left text-[9.5px] font-extrabold uppercase tracking-[0.1em] text-slate-500">
                         Un.
                       </th>
+                      <th className="w-[108px] bg-paper px-1.5 py-2 text-left text-[9.5px] font-extrabold uppercase tracking-[0.1em] text-slate-500">
+                        Natureza
+                      </th>
                       {draft.suppliers.map((supplier, index) => (
                         <th key={supplier.id} className="w-[104px] bg-paper px-1.5 py-2 text-right text-[9.5px] font-extrabold uppercase tracking-[0.1em] text-slate-500">
                           <span className="block truncate" title={supplier.name}>
@@ -614,7 +673,15 @@ export function QuotationEditor({ initial, quotationId, protocol: initialProtoco
                                 rows={2}
                                 placeholder="Descrição do item, material ou serviço"
                                 value={item.description}
-                                onChange={(event) => updateItem(item.id, { description: event.target.value })}
+                                onChange={(event) =>
+                                  updateItem(item.id, {
+                                    description: event.target.value,
+                                    // Sugere a natureza enquanto o usuário ainda não escolheu manualmente.
+                                    ...(naturePinned.has(item.id)
+                                      ? {}
+                                      : { nature: inferNature(event.target.value, item.unit) }),
+                                  })
+                                }
                               />
                             </div>
                           </td>
@@ -637,6 +704,22 @@ export function QuotationEditor({ initial, quotationId, protocol: initialProtoco
                               {UNITS.map((unit) => (
                                 <option key={unit} value={unit}>
                                   {unit}
+                                </option>
+                              ))}
+                            </select>
+                          </td>
+                          <td className="border-b border-line px-1.5 py-1.5">
+                            <select
+                              className={`field !py-1.5 text-[11.5px] font-semibold ${NATURE_STYLE[item.nature]}`}
+                              value={item.nature}
+                              aria-label={`Natureza do item ${itemIndex + 1}`}
+                              onChange={(event) =>
+                                updateItem(item.id, { nature: event.target.value as ItemNature })
+                              }
+                            >
+                              {NATURE_VALUES.map((nature) => (
+                                <option key={nature} value={nature}>
+                                  {NATURE_LABEL[nature]}
                                 </option>
                               ))}
                             </select>
@@ -669,7 +752,7 @@ export function QuotationEditor({ initial, quotationId, protocol: initialProtoco
                       );
                     })}
                     <tr>
-                      <td colSpan={3} className="bg-paper px-2 py-2 text-right text-[10px] font-extrabold uppercase tracking-[0.1em] text-slate-500">
+                      <td colSpan={4} className="bg-paper px-2 py-2 text-right text-[10px] font-extrabold uppercase tracking-[0.1em] text-slate-500">
                         Total por fornecedor
                       </td>
                       {draft.suppliers.map((supplier) => {
@@ -717,7 +800,10 @@ export function QuotationEditor({ initial, quotationId, protocol: initialProtoco
                       rows={5}
                       placeholder="Resumo das propostas analisadas, cobertura e diferenças de valor."
                       value={draft.analysis.summary}
-                      onChange={(event) => update({ analysis: { ...draft.analysis, summary: event.target.value } })}
+                      onChange={(event) => {
+                        setAnalysisTouched(true);
+                        update({ analysis: { ...draft.analysis, summary: event.target.value } });
+                      }}
                     />
                   </label>
                   <label className="block">
@@ -727,9 +813,10 @@ export function QuotationEditor({ initial, quotationId, protocol: initialProtoco
                       rows={3}
                       placeholder="Fornecedor recomendado e condicionantes."
                       value={draft.analysis.recommendation}
-                      onChange={(event) =>
-                        update({ analysis: { ...draft.analysis, recommendation: event.target.value } })
-                      }
+                      onChange={(event) => {
+                        setAnalysisTouched(true);
+                        update({ analysis: { ...draft.analysis, recommendation: event.target.value } });
+                      }}
                     />
                   </label>
                   <label className="block">
@@ -837,6 +924,48 @@ export function QuotationEditor({ initial, quotationId, protocol: initialProtoco
                     {metrics.savings > 0 ? `${metrics.savingsPercent.toFixed(1)}%` : "—"}
                   </p>
                 </div>
+              </div>
+              <div className="border-b border-line px-4 py-3">
+                <p className="label !text-[8px]">Composição da melhor proposta</p>
+                {metrics.best ? (
+                  <>
+                    <div className="mt-1.5 flex h-2 overflow-hidden rounded-full bg-paper">
+                      {(() => {
+                        const { material, mao_de_obra: labor, outros } = metrics.bestByNature;
+                        const total = material + labor + outros;
+                        if (total <= 0) return <div className="h-full w-full bg-line" />;
+                        return (
+                          <>
+                            <div className="h-full bg-sky-500" style={{ width: `${(material / total) * 100}%` }} />
+                            <div className="h-full bg-violet-500" style={{ width: `${(labor / total) * 100}%` }} />
+                            <div className="h-full bg-slate-400" style={{ width: `${(outros / total) * 100}%` }} />
+                          </>
+                        );
+                      })()}
+                    </div>
+                    <dl className="mt-2 space-y-1">
+                      {([
+                        ["material", "bg-sky-500"],
+                        ["mao_de_obra", "bg-violet-500"],
+                        ["outros", "bg-slate-400"],
+                      ] as const).map(([nature, color]) => (
+                        <div key={nature} className="flex items-center justify-between gap-2 text-[11px]">
+                          <dt className="flex items-center gap-1.5 text-slate-600">
+                            <span className={`h-2 w-2 rounded-full ${color}`} />
+                            {NATURE_LABEL[nature]}
+                          </dt>
+                          <dd className="font-bold tabular-nums text-ink">
+                            {formatCurrency(metrics.bestByNature[nature])}
+                          </dd>
+                        </div>
+                      ))}
+                    </dl>
+                  </>
+                ) : (
+                  <p className="mt-1 text-[11px] leading-snug text-slate-500">
+                    Informe os preços para ver quanto é material e quanto é mão de obra.
+                  </p>
+                )}
               </div>
               <div className="px-4 py-3">
                 <p className="label !text-[8px]">Pendências para concluir</p>
