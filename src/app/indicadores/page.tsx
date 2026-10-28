@@ -15,14 +15,23 @@ export default async function IndicatorsPage({ searchParams }: { searchParams: P
   let condominiums: string[] = [];
   let downloads: PdfExportRecord[] = [];
   let dbError = false;
+
+  // Os mapas e condomínios são a base dos indicadores. O histórico de PDFs é
+  // complementar: uma falha nele não pode apagar o dashboard inteiro.
   try {
-    const [quotations, condos, exports] = await Promise.all([listQuotations(), listCondominiums(), listPdfExports(10)]);
+    const [quotations, condos] = await Promise.all([listQuotations(), listCondominiums()]);
     records = quotations;
     condominiums = condos.map((item) => item.name);
-    downloads = exports;
   } catch {
     dbError = true;
   }
+
+  try {
+    downloads = await listPdfExports(10);
+  } catch {
+    downloads = [];
+  }
+
   return (
     <AppShell>
       <IndicatorsDashboard
