@@ -4,6 +4,14 @@ import { after, test } from "node:test";
 import { parsePurchaseUrl } from "../src/lib/constants";
 import { searchProductsOnline } from "../src/lib/server/product-search";
 
+test("reconhece KaBuM e demais lojas da lista, e mantém lojas desconhecidas sem selo", () => {
+  const kabum = parsePurchaseUrl("https://www.kabum.com.br/produto/475566/luminaria-solar-integrada-intelbras-lsi-4800-lm-4848040");
+  assert.equal(kabum?.trusted, true);
+  assert.equal(kabum?.store, "KaBuM!");
+  assert.equal(parsePurchaseUrl("shopping.mercadolivre.com.br/item/1")?.trusted, true);
+  assert.equal(parsePurchaseUrl("https://www.leroymerlin.com.br/produto")?.trusted, true);
+});
+
 test("aceita links apenas de lojas confiáveis", () => {
   const trusted = parsePurchaseUrl("https://www.leroymerlin.com.br/tubo-pvc-25mm-123");
   assert.equal(trusted?.trusted, true);
@@ -49,7 +57,7 @@ test("pesquisa com Google Search, descarta loja não confiável e trata preço",
     assert.deepEqual(body.tools, [{ google_search: {} }]);
     assert.ok(!String(received.url).includes("chave-ficticia"), "a chave não pode ir na URL");
     assert.equal((received.headers as Headers).get("x-goog-api-key"), "chave-ficticia");
-    assert.match(body.contents[0].parts[0].text, /LOJAS PERMITIDAS/);
+    assert.match(body.contents[0].parts[0].text, /LOJAS PREFERENCIAIS/);
     assert.match(body.contents[0].parts[0].text, /leroymerlin\.com\.br/);
 
     const [tubo, registro, generico] = output.results;
@@ -57,14 +65,16 @@ test("pesquisa com Google Search, descarta loja não confiável e trata preço",
     assert.equal(tubo.purchaseUrl, "https://www.leroymerlin.com.br/tubo-pvc-25mm/p");
     assert.equal(tubo.price, 89.9);
     assert.equal(tubo.trusted, true);
-    // Loja fora da lista: link descartado, item marcado como não encontrado.
-    assert.equal(registro.found, false);
-    assert.equal(registro.purchaseUrl, "");
+    // Loja fora da lista: link válido mantido, porém sem o selo de confiável.
+    assert.equal(registro.found, true);
+    assert.equal(registro.purchaseUrl, "https://loja-duvidosa.example/registro");
     assert.equal(registro.trusted, false);
     assert.equal(registro.price, 64.5);
+    assert.match(registro.note, /fora da lista preferencial/i);
     assert.equal(generico.found, false);
-    assert.ok(output.warnings.some((warning) => /fora da lista confiável/i.test(warning)));
-    assert.ok(output.warnings.some((warning) => /sem resultado confiável/i.test(warning)));
+    assert.equal(generico.purchaseUrl, "");
+    assert.ok(output.warnings.some((warning) => /sem o selo de loja confiável/i.test(warning)));
+    assert.ok(output.warnings.some((warning) => /sem link encontrado/i.test(warning)));
   } finally {
     globalThis.fetch = original;
   }

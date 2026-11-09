@@ -9,8 +9,26 @@ function normalize(value: string): string {
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
+    // Remove pontuação para que "Luminária Solar, LSI 4800" combine com "luminaria solar lsi 4800".
+    .replace(/[^a-z0-9\s]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+/** Quando há dois endereços do mesmo site, prefere o mais completo (página do produto). */
+export function preferFullerUrl(current: string | undefined, incoming: string | undefined): string | undefined {
+  if (!incoming) return current;
+  if (!current) return incoming;
+  try {
+    const a = new URL(current);
+    const b = new URL(incoming);
+    if (a.hostname.replace(/^www\./, "") === b.hostname.replace(/^www\./, "") && b.pathname.length > a.pathname.length) {
+      return incoming;
+    }
+  } catch {
+    if (incoming.length > current.length) return incoming;
+  }
+  return current;
 }
 
 function attachmentSource(extraction: AiExtractionResult): AttachmentMeta["source"] {
@@ -104,6 +122,10 @@ export function mergeComplementary(
         paymentTerms: existing.paymentTerms || incoming.paymentTerms,
         validity: existing.validity || incoming.validity,
         notes: existing.notes || incoming.notes,
+        purchaseUrl: preferFullerUrl(existing.purchaseUrl, incoming.purchaseUrl) ?? existing.purchaseUrl,
+        purchaseStore: existing.purchaseStore || incoming.purchaseStore,
+        purchaseVerified: existing.purchaseVerified ?? incoming.purchaseVerified,
+        purchaseSource: existing.purchaseSource ?? incoming.purchaseSource,
       };
     } else if (suppliers.filter((supplier) => supplier.name.trim()).length < MAX_SUPPLIERS || suppliers.length < MAX_SUPPLIERS) {
       suppliers.push(incoming);
@@ -137,7 +159,7 @@ export function mergeComplementary(
         ...existing,
         prices,
         costType: keepCostType ? existing.costType : incoming.costType ?? existing.costType,
-        purchaseUrl: existing.purchaseUrl || incoming.purchaseUrl,
+        purchaseUrl: preferFullerUrl(existing.purchaseUrl, incoming.purchaseUrl),
         purchaseStore: existing.purchaseStore || incoming.purchaseStore,
         purchasePrice: existing.purchasePrice ?? incoming.purchasePrice ?? null,
         purchaseVerified: existing.purchaseVerified ?? incoming.purchaseVerified,

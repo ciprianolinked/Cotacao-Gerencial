@@ -335,6 +335,21 @@ function nullableNumber(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function supplierPurchase(supplier: Record<string, unknown>) {
+  const link = parsePurchaseUrl(supplier.purchaseUrl);
+  if (!link) return {};
+  const sourceValue = asString(supplier.purchaseSource, "manual");
+  return {
+    purchaseUrl: link.url,
+    purchaseStore: link.store ?? asString(supplier.purchaseStore).slice(0, 80),
+    purchaseVerified: link.trusted,
+    purchaseSource: (["manual", "documento", "pesquisa"].includes(sourceValue) ? sourceValue : "manual") as
+      | "manual"
+      | "documento"
+      | "pesquisa",
+  };
+}
+
 /** Aceita apenas endereços http(s) válidos; links inválidos são descartados. */
 function normalizedPurchase(item: Record<string, unknown>) {
   const link = parsePurchaseUrl(item.purchaseUrl);
@@ -366,6 +381,7 @@ export function normalizeDraft(input: unknown): QuotationDraft {
       paymentTerms: asString(supplier.paymentTerms).slice(0, 160),
       validity: asString(supplier.validity).slice(0, 80),
       notes: asString(supplier.notes).slice(0, 400),
+      ...supplierPurchase(supplier),
     };
   });
   const safeSuppliers = suppliers.length > 0 ? suppliers : [createSupplier(0), createSupplier(1), createSupplier(2)];
@@ -441,4 +457,48 @@ export function normalizeDraft(input: unknown): QuotationDraft {
 export function nextProtocol(count: number): string {
   const year = new Date().getFullYear();
   return `MC-${year}-${String(count + 1).padStart(4, "0")}`;
+}
+
+export type CompletenessIssue = { field: string; message: string };
+
+/**
+ * Lista o que falta preencher no mapa, como faria um gestor conferindo a
+ * proposta: identificação, preços por item, condições comerciais e links.
+ */
+export function checkCompleteness(draft: Pick<QuotationDraft, "condominium" | "service" | "suppliers" | "items">): CompletenessIssue[] {
+  const issues: CompletenessIssue[] = [];
+  if (!draft.condominium.trim()) issues.push({ field: "condominium", message: "Informe o condomínio/associação." });
+  if (!draft.service.trim()) issues.push({ field: "service", message: "Informe o serviço/objeto da cotação." });
+  const named = draft.suppliers.filter((supplier) => supplier.name.trim());
+  if (named.length < 2) issues.push({ field: "suppliers", message: "Cadastre ao menos 2 fornecedores com nome." });
+
+  draft.items.forEach((item, index) => {
+    const label = `Item ${String(index + 1).padStart(2, "0")}`;
+    const description = item.description.trim();
+    if (!description) {
+      issues.push({ field: `items.${index}.description`, message: `${label}: descreva o produto ou serviço.` });
+      return;
+    }
+    if (!(item.quantity > 0)) issues.push({ field: `items.${index}.quantity`, message: `${label} (${description.slice(0, 40)}): informe a quantidade.` });
+    const priced = named.filter((supplier) => item.prices?.[supplier.id] != null);
+    if (named.length > 0 && priced.length === 0) {
+      issues.push({ field: `items.${index}.prices`, message: `${label} (${description.slice(0, 40)}): nenhum fornecedor com preço.` });
+    } else if (priced.length > 0 && priced.length < named.length) {
+      const missing = named.filter((supplier) => item.prices?.[supplier.id] == null).map((supplier) => supplier.name.trim());
+      issues.push({ field: `items.${index}.prices`, message: `${label} (${description.slice(0, 40)}): sem preço de ${missing.join(", ")}.` });
+    }
+    if (!item.purchaseUrl) issues.push({ field: `items.${index}.purchaseUrl`, message: `${label} (${description.slice(0, 40)}): sem link de compra.` });
+  });
+
+  for (const supplier of named) {
+    const missing: string[] = [];
+    if (!supplier.contact.trim()) missing.push("contato");
+    if (!supplier.deliveryDays.trim()) missing.push("prazo de entrega");
+    if (!supplier.paymentTerms.trim()) missing.push("pagamento");
+    if (!supplier.validity.trim()) missing.push("validade");
+    if (missing.length > 0) {
+      issues.push({ field: `suppliers.${supplier.id}`, message: `${supplier.name.trim()}: faltam ${missing.join(", ")}.` });
+    }
+  }
+  return issues;
 }

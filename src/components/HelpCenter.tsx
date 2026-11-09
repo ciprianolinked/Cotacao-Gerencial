@@ -75,6 +75,7 @@ const TOPICS: Topic[] = [
       "Clique em “Analisar propostas e gerar mapa” e aguarde a resposta. A porcentagem exibida é uma estimativa.",
       "Ao terminar, clique em “Aplicar dados ao mapa”. Confira os fornecedores, itens, quantidades, preços e condições antes de salvar.",
       "Em um mapa já preenchido, escolha “Completar o mapa atual” para somar um arquivo recebido depois. Os preços já lançados são preservados e apenas as lacunas são preenchidas.",
+      "Se a leitura vier incompleta, use “Reanalisar cotação completa” na lateral: os mesmos arquivos são enviados de novo, sem precisar reanexar. Depois use “Verificar preenchimento” para listar o que ainda falta.",
     ],
     tip: "O aplicativo guarda os dados extraídos, não os arquivos originais. Para somar um novo documento, envie-o novamente junto nesta análise e mantenha a opção “Completar o mapa atual”.",
     keywords: "anexo arquivo foto upload tres propostas pdf jpg jpeg webp png enviar aplicar dados progresso gemini",
@@ -89,7 +90,7 @@ const TOPICS: Topic[] = [
       "Em um mapa já pronto, use o botão “Pesquisar online” nessa mesma área para buscar apenas os itens que estão sem link.",
       "Para cadastrar manualmente, cole o endereço completo (https://…) no campo do item. Links fora da lista são aceitos, mas não recebem o selo de confiável.",
     ],
-    tip: "A IA nunca deve inventar endereços: quando não encontra uma página confiável, o item fica sem link e com aviso. Sempre confira o anúncio, o preço e o prazo antes de comprar.",
+    tip: "A IA copia o endereço completo da página do produto (nunca só o domínio) e nunca inventa links. Links de lojas fora da lista aparecem sem o selo de confiável. Sempre confira o anúncio, o preço e o prazo antes de comprar.",
     keywords: "pesquisa online link compra produto loja confiavel url preço google search mercado livre leroy telhanorte",
   },
   {

@@ -10,6 +10,11 @@ export type Supplier = {
   paymentTerms: string;
   validity: string;
   notes: string;
+  /** Link do e-commerce/loja do próprio fornecedor. */
+  purchaseUrl?: string;
+  purchaseStore?: string;
+  purchaseVerified?: boolean;
+  purchaseSource?: "manual" | "documento" | "pesquisa";
 };
 
 export type QuoteItem = {

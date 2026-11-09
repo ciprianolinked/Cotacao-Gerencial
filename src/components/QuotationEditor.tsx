@@ -16,6 +16,7 @@ import type {
 import { CATEGORIES, COST_TYPE_LABEL, COST_TYPES, MAX_SUPPLIERS, STATUS_LABEL, STATUS_STYLE, UNITS } from "@/lib/constants";
 import {
   buildNarrative,
+  checkCompleteness,
   computeMetrics,
   createItem,
   createSupplier,
@@ -32,6 +33,7 @@ import type { ApplyMode } from "@/components/AiImportPanel";
 import { saveBase64File, type PdfDownload } from "@/lib/download";
 import { parsePurchaseUrl } from "@/lib/constants";
 import { MapDocument } from "./MapDocument";
+import { ProductSearchPanel } from "./ProductSearchPanel";
 import { AiImportPanel, type AiFileMeta } from "./AiImportPanel";
 import {
   ArrowLeftIcon,
@@ -72,6 +74,9 @@ export function QuotationEditor({ initial, quotationId, protocol: initialProtoco
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [searchingProducts, setSearchingProducts] = useState(false);
+  const [analysisFiles, setAnalysisFiles] = useState<File[]>([]);
+  const [reanalyzeSignal, setReanalyzeSignal] = useState(0);
+  const [completeness, setCompleteness] = useState<string[] | null>(null);
 
   const metrics = useMemo(() => computeMetrics(draft), [draft]);
 
@@ -177,10 +182,12 @@ export function QuotationEditor({ initial, quotationId, protocol: initialProtoco
     setFeedback({ tone: "ok", message: "Análise técnica recalculada com base nos valores atuais." });
   }
 
-  function applyExtraction(result: AiExtractionResult, files: AiFileMeta[], mode: ApplyMode = "replace") {
+  function applyExtraction(result: AiExtractionResult, files: AiFileMeta[], mode: ApplyMode = "replace", rawFiles: File[] = []) {
     const next = mode === "merge" ? mergeComplementary(draft, result, files) : mergeExtraction(draft, result, files);
     setDraft(next);
     setDirty(true);
+    setCompleteness(null);
+    if (rawFiles.length > 0) setAnalysisFiles(rawFiles);
     if (mode === "merge") {
       const changes = describeMerge(draft, next);
       setFeedback({
@@ -225,6 +232,58 @@ export function QuotationEditor({ initial, quotationId, protocol: initialProtoco
     if (!link.trusted) {
       setFeedback({ tone: "ok", message: `Link salvo. ${link.host} não está na lista de lojas confiáveis, por isso não é marcado como verificado.` });
     }
+  }
+
+  function addProductAsItem(result: ProductSearchResult) {
+    const supplierIds = draft.suppliers.map((supplier) => supplier.id);
+    const item = createItem(result.description, supplierIds);
+    update({
+      items: [
+        ...draft.items,
+        {
+          ...item,
+          unit: "un",
+          quantity: 1,
+          costType: "material",
+          purchaseUrl: result.purchaseUrl,
+          purchaseStore: result.store ?? "",
+          purchasePrice: result.price,
+          purchaseVerified: result.trusted,
+          purchaseSource: "pesquisa",
+        },
+      ],
+    });
+    setFeedback({ tone: "ok", message: `"${result.description}" adicionado ao mapa com o link de compra.` });
+  }
+
+  function attachProductToSupplier(result: ProductSearchResult) {
+    const target = draft.suppliers.find((supplier) => supplier.name.trim()) ?? draft.suppliers[0];
+    if (!target) return;
+    updateSupplier(target.id, {
+      purchaseUrl: result.purchaseUrl,
+      purchaseStore: result.store ?? "",
+      purchaseVerified: result.trusted,
+      purchaseSource: "pesquisa",
+    });
+    setFeedback({ tone: "ok", message: `Link vinculado ao fornecedor ${target.name || "A"}.` });
+  }
+
+  function setSupplierLink(supplierId: string, raw: string) {
+    if (!raw.trim()) {
+      updateSupplier(supplierId, { purchaseUrl: undefined, purchaseStore: undefined, purchaseVerified: false, purchaseSource: "manual" });
+      return;
+    }
+    const link = parsePurchaseUrl(raw);
+    if (!link) {
+      setFeedback({ tone: "error", message: "Link do fornecedor inválido. Use um endereço completo http(s)." });
+      return;
+    }
+    updateSupplier(supplierId, {
+      purchaseUrl: link.url,
+      purchaseStore: link.store ?? "",
+      purchaseVerified: link.trusted,
+      purchaseSource: "manual",
+    });
   }
 
   async function searchProductsOnline() {
@@ -582,6 +641,9 @@ export function QuotationEditor({ initial, quotationId, protocol: initialProtoco
                       draft.items.some((item) => item.description.trim())
                     }
                     existingFileNames={draft.attachments.map((file) => file.name)}
+                    initialFiles={analysisFiles}
+                    onFilesChange={setAnalysisFiles}
+                    reanalyzeSignal={reanalyzeSignal}
                   />
                 </div>
               )}
@@ -691,6 +753,25 @@ export function QuotationEditor({ initial, quotationId, protocol: initialProtoco
                           onChange={(event) => updateSupplier(supplier.id, { notes: event.target.value })}
                         />
                       </label>
+                      <div className="mt-2">
+                        <span className="label !text-[8.5px]">Site / e-commerce do fornecedor</span>
+                        <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
+                          <input
+                            className="field min-w-[180px] flex-1 !py-1.5 text-[11.5px]"
+                            placeholder="https://loja-do-fornecedor.com.br"
+                            inputMode="url"
+                            value={supplier.purchaseUrl ?? ""}
+                            onChange={(event) => updateSupplier(supplier.id, { purchaseUrl: event.target.value })}
+                            onBlur={(event) => setSupplierLink(supplier.id, event.target.value)}
+                          />
+                          {supplier.purchaseUrl && (
+                            <a href={supplier.purchaseUrl} target="_blank" rel="noopener noreferrer" className="text-[10.5px] font-bold text-brand-dark underline underline-offset-2">Abrir</a>
+                          )}
+                          {supplier.purchaseVerified && (
+                            <span className="rounded-full bg-success-soft px-2 py-0.5 text-[9px] font-bold uppercase tracking-[0.05em] text-success">Loja confiável</span>
+                          )}
+                        </div>
+                      </div>
                       <div className="mt-2 grid grid-cols-3 gap-2 rounded-lg bg-paper/70 px-3 py-2 text-[10.5px]">
                         <div><span className="block text-slate-500">Mão de obra</span><strong className="text-ink">{formatCurrency(breakdown.mao_obra.total)}</strong></div>
                         <div><span className="block text-slate-500">Material</span><strong className="text-ink">{formatCurrency(breakdown.material.total)}</strong></div>
@@ -716,21 +797,21 @@ export function QuotationEditor({ initial, quotationId, protocol: initialProtoco
                 }
               />
               <div className="mt-3 -mx-1 overflow-x-auto px-1 pb-1">
-                <table className="w-full min-w-[720px] border-separate border-spacing-0">
+                <table className="w-full min-w-[880px] border-separate border-spacing-0">
                   <thead>
                     <tr>
-                      <th className="sticky left-0 z-10 w-[38%] rounded-tl-lg bg-paper px-2 py-2 text-left text-[9.5px] font-extrabold uppercase tracking-[0.1em] text-slate-500">
+                      <th className="sticky left-0 z-10 min-w-[240px] rounded-tl-lg bg-paper px-2 py-2 text-left text-[9.5px] font-extrabold uppercase tracking-[0.1em] text-slate-500">
                         Item / descrição
                       </th>
-                      <th className="w-[64px] bg-paper px-1.5 py-2 text-center text-[9.5px] font-extrabold uppercase tracking-[0.1em] text-slate-500">
+                      <th className="w-[76px] bg-paper px-1.5 py-2 text-center text-[9.5px] font-extrabold uppercase tracking-[0.1em] text-slate-500">
                         Qtd
                       </th>
-                      <th className="w-[92px] bg-paper px-1.5 py-2 text-left text-[9.5px] font-extrabold uppercase tracking-[0.1em] text-slate-500">
+                      <th className="w-[104px] bg-paper px-1.5 py-2 text-left text-[9.5px] font-extrabold uppercase tracking-[0.1em] text-slate-500">
                         Un.
                       </th>
                       {draft.suppliers.map((supplier, index) => (
-                        <th key={supplier.id} className="w-[104px] bg-paper px-1.5 py-2 text-right text-[9.5px] font-extrabold uppercase tracking-[0.1em] text-slate-500">
-                          <span className="block truncate" title={supplier.name}>
+                        <th key={supplier.id} className="w-[136px] bg-paper px-1.5 py-2 text-right text-[9.5px] font-extrabold uppercase tracking-[0.1em] text-slate-500">
+                          <span className="block leading-tight" title={supplier.name}>
                             {String.fromCharCode(65 + index)} · {supplier.name || "Fornecedor"}
                           </span>
                           <span className="font-semibold normal-case tracking-normal text-[8.5px] text-slate-400">valor unit.</span>
@@ -754,8 +835,8 @@ export function QuotationEditor({ initial, quotationId, protocol: initialProtoco
                               </span>
                               <div className="min-w-0 flex-1">
                                 <textarea
-                                  className="field resize-none !py-1.5 text-[12px]"
-                                  rows={2}
+                                  className="field resize-y !py-2 text-[12.5px] leading-snug"
+                                  rows={3}
                                   placeholder="Descrição do item, material ou serviço"
                                   value={item.description}
                                   onChange={(event) => updateItem(item.id, { description: event.target.value })}
@@ -775,15 +856,17 @@ export function QuotationEditor({ initial, quotationId, protocol: initialProtoco
                             <input
                               type="number"
                               min={0}
-                              step="0.01"
-                              className="field !py-1.5 text-center text-[12px]"
+                              step="1"
+                              aria-label={`Quantidade do item ${itemIndex + 1}`}
+                              className="field !py-2 text-center text-[13px] font-bold tabular-nums"
                               value={item.quantity}
                               onChange={(event) => updateItem(item.id, { quantity: Number(event.target.value) || 0 })}
                             />
                           </td>
                           <td className="border-b border-line px-1.5 py-1.5">
                             <select
-                              className="field !py-1.5 text-[11.5px]"
+                              className="field !py-2 text-[12px]"
+                              aria-label={`Unidade do item ${itemIndex + 1}`}
                               value={item.unit}
                               onChange={(event) => updateItem(item.id, { unit: event.target.value })}
                             >
@@ -855,10 +938,20 @@ export function QuotationEditor({ initial, quotationId, protocol: initialProtoco
                       Opcional. A IA preenche quando o link aparece no documento ou na pesquisa em lojas confiáveis. Você também pode colar o endereço manualmente.
                     </p>
                   </div>
-                  <button type="button" onClick={searchProductsOnline} disabled={searchingProducts} className="btn btn-ghost !py-1.5">
-                    <SearchIcon className="h-3.5 w-3.5" />
-                    {searchingProducts ? "Pesquisando…" : "Pesquisar online"}
-                  </button>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button type="button" onClick={searchProductsOnline} disabled={searchingProducts} className="btn btn-ghost !py-1.5">
+                      <SearchIcon className="h-3.5 w-3.5" />
+                      {searchingProducts ? "Pesquisando…" : "Pesquisar itens do mapa"}
+                    </button>
+                  </div>
+                </div>
+                <div className="mt-2.5">
+                  <ProductSearchPanel
+                    condominium={draft.condominium}
+                    onAddItem={addProductAsItem}
+                    onAttachToSupplier={attachProductToSupplier}
+                    hasSuppliers={draft.suppliers.some((supplier) => supplier.name.trim())}
+                  />
                 </div>
                 <ul className="mt-2 space-y-2.5">
                   {draft.items.filter((item) => item.description.trim()).length === 0 && (
@@ -1100,6 +1193,52 @@ export function QuotationEditor({ initial, quotationId, protocol: initialProtoco
                 </button>
                 <button
                   type="button"
+                  onClick={() => {
+                    if (analysisFiles.length === 0) {
+                      setAiOpen(true);
+                      setFeedback({ tone: "error", message: "Nenhum arquivo guardado nesta sessão. Anexe as propostas na leitura com IA e depois use este botão." });
+                      return;
+                    }
+                    setAiOpen(true);
+                    setReanalyzeSignal((signal) => signal + 1);
+                    setFeedback({ tone: "ok", message: "Reanalisando a cotação com os mesmos arquivos, sem precisar reanexar." });
+                  }}
+                  className="btn btn-ghost w-full !justify-start"
+                >
+                  <SparklesIcon className="h-4 w-4" />
+                  Reanalisar cotação completa
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const issues = checkCompleteness(draft).map((issue) => issue.message);
+                    setCompleteness(issues);
+                    setFeedback({
+                      tone: issues.length ? "error" : "ok",
+                      message: issues.length
+                        ? `${issues.length} ponto(s) para conferir antes de concluir.`
+                        : "Mapa completo: todos os campos essenciais estão preenchidos.",
+                    });
+                  }}
+                  className="btn btn-ghost w-full !justify-start"
+                >
+                  <CheckIcon className="h-4 w-4" />
+                  Verificar preenchimento
+                </button>
+                {completeness !== null && (
+                  <div className="rounded-lg border border-line bg-paper/60 px-2.5 py-2">
+                    {completeness.length === 0 ? (
+                      <p className="text-[10.5px] font-semibold text-success">Nada pendente. Pode salvar e apresentar.</p>
+                    ) : (
+                      <ul className="max-h-40 space-y-1 overflow-auto text-[10.5px] leading-snug text-slate-600">
+                        {completeness.slice(0, 12).map((issue) => <li key={issue}>• {issue}</li>)}
+                        {completeness.length > 12 && <li>• …e mais {completeness.length - 12} ponto(s).</li>}
+                      </ul>
+                    )}
+                  </div>
+                )}
+                <button
+                  type="button"
                   onClick={regenerateAnalysis}
                   className="btn btn-ghost w-full !justify-start"
                 >
@@ -1235,12 +1374,12 @@ function MoneyInput({
 
   return (
     <div className="relative">
-      <span className="pointer-events-none absolute left-1.5 top-1/2 -translate-y-1/2 text-[9.5px] font-bold text-slate-400">
+      <span className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-[10px] font-bold text-slate-500">
         R$
       </span>
       <input
         inputMode="decimal"
-        className={`field !py-1.5 pl-6 text-right text-[12px] tabular-nums ${
+        className={`field !py-2 pl-8 pr-2 text-right text-[12.5px] font-semibold tabular-nums ${
           highlight ? "!border-success/50 !bg-success-soft font-bold text-success" : ""
         }`}
         placeholder="0,00"
