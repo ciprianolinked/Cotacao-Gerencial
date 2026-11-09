@@ -217,7 +217,15 @@ export function MapDocument({ draft, protocol, generatedAt }: MapDocumentProps) 
                     <td className="text-slate-600">{supplier.deliveryDays || "—"}</td>
                     <td className="text-slate-600">{supplier.paymentTerms || "—"}</td>
                     <td className="text-slate-600">{supplier.validity || "—"}</td>
-                    <td className="text-[8.5px] text-slate-600">{supplier.contact || "—"}</td>
+                    <td className="text-[8.5px] text-slate-600">
+                      {supplier.contact || "—"}
+                      {supplier.purchaseUrl && (
+                        <div className="mt-0.5 break-all text-[8px] text-brand-dark">
+                          Loja: {supplier.purchaseUrl}
+                          {supplier.purchaseVerified ? " (confiável)" : ""}
+                        </div>
+                      )}
+                    </td>
                   </tr>
                 );
               })}

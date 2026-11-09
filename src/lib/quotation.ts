@@ -335,6 +335,21 @@ function nullableNumber(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function supplierPurchase(supplier: Record<string, unknown>) {
+  const link = parsePurchaseUrl(supplier.purchaseUrl);
+  if (!link) return {};
+  const sourceValue = asString(supplier.purchaseSource, "manual");
+  return {
+    purchaseUrl: link.url,
+    purchaseStore: link.store ?? asString(supplier.purchaseStore).slice(0, 80),
+    purchaseVerified: link.trusted,
+    purchaseSource: (["manual", "documento", "pesquisa"].includes(sourceValue) ? sourceValue : "manual") as
+      | "manual"
+      | "documento"
+      | "pesquisa",
+  };
+}
+
 /** Aceita apenas endereços http(s) válidos; links inválidos são descartados. */
 function normalizedPurchase(item: Record<string, unknown>) {
   const link = parsePurchaseUrl(item.purchaseUrl);
@@ -366,6 +381,7 @@ export function normalizeDraft(input: unknown): QuotationDraft {
       paymentTerms: asString(supplier.paymentTerms).slice(0, 160),
       validity: asString(supplier.validity).slice(0, 80),
       notes: asString(supplier.notes).slice(0, 400),
+      ...supplierPurchase(supplier),
     };
   });
   const safeSuppliers = suppliers.length > 0 ? suppliers : [createSupplier(0), createSupplier(1), createSupplier(2)];

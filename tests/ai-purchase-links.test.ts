@@ -92,3 +92,37 @@ after(async () => {
   const { pool } = await import("../src/db");
   await pool.end();
 });
+
+test("extrai site do fornecedor e permite complementar com link de e-commerce", async () => {
+  const previous = process.env.GEMINI_API_KEY;
+  process.env.GEMINI_API_KEY = "chave-ficticia";
+  const original = globalThis.fetch;
+  globalThis.fetch = async () => Response.json({
+    candidates: [{
+      finishReason: "STOP",
+      content: { parts: [{ text: JSON.stringify({
+        condominium: "Condomínio E-commerce",
+        suppliers: [{ name: "Kabum Comércio", purchaseUrl: "https://www.kabum.com.br" }, { name: "Fornecedor Local" }],
+        items: [{ description: "Luminária Solar Intelbras LSI 4800", costType: "material", unit: "un", quantity: 1, prices: [1572.28, 1690] }],
+      }) }] },
+    }],
+  });
+  try {
+    const { extractQuotation } = await import("../src/lib/ai");
+    const result = await extractQuotation({
+      files: [{ name: "cotacao.pdf", size: 10, type: "application/pdf", base64: "cGRm" }],
+      text: "",
+      hints: {},
+      searchProducts: false,
+    });
+    const [kabum] = result.draft.suppliers;
+    assert.equal(kabum.purchaseUrl, "https://www.kabum.com.br/");
+    assert.equal(kabum.purchaseVerified, true);
+    assert.equal(kabum.purchaseSource, "documento");
+    assert.equal(result.draft.suppliers[1].purchaseUrl, undefined);
+  } finally {
+    globalThis.fetch = original;
+    if (previous === undefined) delete process.env.GEMINI_API_KEY;
+    else process.env.GEMINI_API_KEY = previous;
+  }
+});

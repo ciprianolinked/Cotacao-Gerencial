@@ -31,11 +31,11 @@ Pesquise cada item abaixo em lojas confiáveis do Brasil e devolva o melhor resu
 ITENS:
 ${list}
 
-LOJAS PERMITIDAS (use somente estas): ${TRUSTED_STORES.map((store) => `${store.label} (${store.domain})`).join("; ")}.
+LOJAS PREFERENCIAIS: ${TRUSTED_STORES.map((store) => `${store.label} (${store.domain})`).join("; ")}.
 
 REGRAS OBRIGATÓRIAS:
-1. Só devolva uma URL que realmente tenha aparecido na pesquisa e pertença a um dos domínios permitidos.
-2. Nunca invente, complete ou adivinhe um endereço. Sem resultado confiável, use "found": false e "url": "".
+1. Devolva o endereço exato da página de produto que apareceu na pesquisa. Prefira as lojas preferenciais; outra loja conhecida só é aceita se você tiver certeza da URL.
+2. Nunca invente, complete ou adivinhe um endereço. Sem página encontrada, use "found": false e "url": "".
 3. Preencha "item" com o número do item da lista acima.
 4. "price" é o preço unitário em reais encontrado no anúncio (número, sem R$). Use null se não houver preço visível.
 5. "productName" é a descrição curta do produto encontrado; "store" é o nome da loja.
@@ -82,64 +82,108 @@ export async function searchProductsOnline({
     return { results: [], warnings: ["Nenhum item descrito para pesquisar."] };
   }
 
-  const body = JSON.stringify({
-    contents: [{ role: "user", parts: [{ text: buildPrompt(items, hint) }] }],
-    tools: [{ google_search: {} }],
-    generationConfig: { thinkingConfig: { thinkingLevel: "low" } },
-  });
-  const url = `${GENERATE_BASE}/${encodeURIComponent(model)}:generateContent`;
+  const prompt = buildPrompt(items, hint);
+  const generateUrl = `${GENERATE_BASE}/${encodeURIComponent(model)}:generateContent`;
+  const interactionsUrl = `${GENERATE_BASE.replace("/models", "")}/interactions`;
+  const transports = [
+    {
+      name: "generateContent",
+      url: generateUrl,
+      body: () => JSON.stringify({
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+        tools: [{ google_search: {} }],
+        generationConfig: { thinkingConfig: { thinkingLevel: "low" } },
+      }),
+    },
+    {
+      name: "interactions",
+      url: interactionsUrl,
+      body: () => JSON.stringify({
+        model,
+        input: [{ type: "text", text: prompt }],
+        tools: [{ type: "google_search" }],
+        store: false,
+      }),
+    },
+  ];
 
-  let response: Response | null = null;
+  let text = "";
+  const warnings: string[] = [];
   let lastError = "";
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    const timeout = AbortSignal.timeout(SEARCH_TIMEOUT_MS);
-    const composed = signal ? AbortSignal.any([signal, timeout]) : timeout;
-    try {
-      response = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey.trim() },
-        body,
-        signal: composed,
-      });
-    } catch (error) {
-      lastError = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")
-        ? "A pesquisa online demorou mais que o esperado."
-        : "Não foi possível conectar ao serviço de pesquisa.";
-      if (attempt === 1) { await new Promise((resolve) => setTimeout(resolve, 1500)); continue; }
-      return { results: [], warnings: [lastError] };
-    }
-    if (response.ok) break;
-    lastError = response.status === 429 || response.status >= 500
-      ? "A pesquisa online está temporariamente indisponível no Google. Tente novamente em instantes."
-      : `A pesquisa online retornou erro ${response.status}. Verifique a chave e a disponibilidade do Google Search no projeto.`;
-    if (attempt === 1 && (response.status === 429 || response.status >= 500)) {
-      await new Promise((resolve) => setTimeout(resolve, 1500));
-      continue;
-    }
-    return { results: [], warnings: [lastError] };
-  }
-  if (!response?.ok) return { results: [], warnings: [lastError || "Falha na pesquisa online."] };
 
-  const data = (await response.json().catch(() => null)) as {
-    candidates?: { content?: { parts?: { text?: string }[] } }[];
-  } | null;
-  const text = (data?.candidates ?? [])
-    .flatMap((candidate) => candidate.content?.parts ?? [])
-    .map((part) => part.text ?? "")
-    .join("\n");
+  function extractText(data: unknown): string {
+    if (!data || typeof data !== "object") return "";
+    const generate = data as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
+    const fromGenerate = (generate.candidates ?? [])
+      .flatMap((candidate) => candidate.content?.parts ?? [])
+      .map((part) => part.text ?? "")
+      .join("\n");
+    if (fromGenerate.trim()) return fromGenerate;
+    const interaction = data as { output_text?: string; steps?: { type?: string; content?: { type?: string; text?: string }[] }[] };
+    return (
+      interaction.output_text ||
+      (interaction.steps ?? [])
+        .filter((step) => step.type === "model_output")
+        .flatMap((step) => step.content ?? [])
+        .map((part) => part.text ?? "")
+        .join("\n")
+    );
+  }
+
+  for (const transport of transports) {
+    let response: Response | null = null;
+    let transportError = "";
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      const timeout = AbortSignal.timeout(SEARCH_TIMEOUT_MS);
+      const composed = signal ? AbortSignal.any([signal, timeout]) : timeout;
+      try {
+        response = await fetch(transport.url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey.trim() },
+          body: transport.body(),
+          signal: composed,
+        });
+      } catch (error) {
+        transportError = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")
+          ? "A pesquisa online demorou mais que o esperado."
+          : "Não foi possível conectar ao serviço de pesquisa.";
+        if (attempt === 1) { await new Promise((resolve) => setTimeout(resolve, 1200)); continue; }
+        break;
+      }
+      if (response.ok) break;
+      const details = await response.text().catch(() => "");
+      transportError = response.status === 429 || response.status >= 500
+        ? "A pesquisa online está temporariamente indisponível no Google. Tente novamente em instantes."
+        : `A pesquisa online retornou erro ${response.status}. ${details.slice(0, 160)}`;
+      if (attempt === 1 && (response.status === 429 || response.status >= 500)) {
+        await new Promise((resolve) => setTimeout(resolve, 1200));
+        continue;
+      }
+      break;
+    }
+
+    if (response?.ok) {
+      const data = await response.json().catch(() => null);
+      text = extractText(data);
+      if (text.trim()) break;
+      transportError = "A pesquisa não retornou resultados. Tente descrever o produto com marca e modelo.";
+    }
+    lastError = transportError || "Falha na pesquisa online.";
+    if (text.trim()) break;
+    warnings.push(`Busca via ${transport.name}: ${lastError}`);
+  }
 
   if (!text.trim()) {
-    return { results: [], warnings: ["A pesquisa online não retornou resultados."] };
+    return { results: [], warnings: warnings.length ? warnings : [lastError || "Falha na pesquisa online."] };
   }
 
   let raw: RawSearchItem[];
   try {
     raw = parseJsonLoose(text);
   } catch {
-    return { results: [], warnings: ["A pesquisa online retornou um formato inesperado. Tente novamente."] };
+    return { results: [], warnings: [...warnings, "A pesquisa online retornou um formato inesperado. Tente novamente."] };
   }
 
-  const warnings: string[] = [];
   const rejected = new Set<string>();
   const results: ProductSearchResult[] = [];
   for (const entry of raw) {
@@ -151,30 +195,31 @@ export async function searchProductsOnline({
     if (rawUrl && !link) {
       warnings.push(`O endereço sugerido para "${items[index]}" não é válido e foi descartado.`);
     } else if (link && !link.trusted) {
-      rejected.add(link.host);
+      rejected.add(link.store ?? link.host);
     }
-    const trustedLink = link?.trusted ? link : null;
     results.push({
       index,
       description: items[index],
-      found: Boolean(entry.found) && Boolean(trustedLink),
-      store: trustedLink?.store ?? null,
+      found: Boolean(link),
+      store: link?.store ?? (typeof entry.store === "string" && entry.store.trim() ? entry.store.trim().slice(0, 80) : link?.host ?? null),
       productName: typeof entry.productName === "string" ? entry.productName.slice(0, 200) : "",
       price: price !== null && Number.isFinite(price) && price > 0 ? round2(price) : null,
-      purchaseUrl: trustedLink?.url ?? "",
-      trusted: Boolean(trustedLink),
-      note: !trustedLink
-        ? "Sem link em loja confiável; confira o fornecedor."
-        : typeof entry.note === "string" ? entry.note.slice(0, 300) : "",
+      purchaseUrl: link?.url ?? "",
+      trusted: Boolean(link?.trusted),
+      note: !link
+        ? "Nenhum link encontrado; descreva o item com mais detalhes ou informe o fornecedor."
+        : !link.trusted
+          ? "Loja fora da lista preferencial: confira o endereço e o vendedor antes de comprar."
+          : typeof entry.note === "string" ? entry.note.slice(0, 300) : "",
     });
   }
 
   if (rejected.size > 0) {
-    warnings.push(`Links de lojas fora da lista confiável foram descartados: ${[...rejected].join(", ")}.`);
+    warnings.push(`Links de lojas fora da lista preferencial foram mantidos sem o selo de loja confiável: ${[...rejected].join(", ")}.`);
   }
   const missing = items.filter((_, index) => !results.some((result) => result.index === index && result.found));
   if (missing.length > 0) {
-    warnings.push(`${missing.length} item(ns) sem resultado confiável: ${missing.slice(0, 4).join("; ")}${missing.length > 4 ? "…" : ""}.`);
+    warnings.push(`${missing.length} item(ns) sem link encontrado: ${missing.slice(0, 4).join("; ")}${missing.length > 4 ? "…" : ""}.`);
   }
   return { results, warnings };
 }

@@ -287,7 +287,7 @@ export async function buildMapPdf(draft: QuotationDraft, protocol: string): Prom
         supplier.deliveryDays || "—",
         supplier.paymentTerms || "—",
         supplier.validity || "—",
-        supplier.contact || "—",
+        (supplier.contact || "—") + (supplier.purchaseUrl ? `\nLoja: ${supplier.purchaseUrl}` : ""),
       ],
       tone: (ranking?.isBest && metrics.isComparable ? "best" : null) as "ink" | "best" | null,
     };

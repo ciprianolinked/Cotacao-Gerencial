@@ -32,6 +32,7 @@ import type { ApplyMode } from "@/components/AiImportPanel";
 import { saveBase64File, type PdfDownload } from "@/lib/download";
 import { parsePurchaseUrl } from "@/lib/constants";
 import { MapDocument } from "./MapDocument";
+import { ProductSearchPanel } from "./ProductSearchPanel";
 import { AiImportPanel, type AiFileMeta } from "./AiImportPanel";
 import {
   ArrowLeftIcon,
@@ -225,6 +226,58 @@ export function QuotationEditor({ initial, quotationId, protocol: initialProtoco
     if (!link.trusted) {
       setFeedback({ tone: "ok", message: `Link salvo. ${link.host} não está na lista de lojas confiáveis, por isso não é marcado como verificado.` });
     }
+  }
+
+  function addProductAsItem(result: ProductSearchResult) {
+    const supplierIds = draft.suppliers.map((supplier) => supplier.id);
+    const item = createItem(result.description, supplierIds);
+    update({
+      items: [
+        ...draft.items,
+        {
+          ...item,
+          unit: "un",
+          quantity: 1,
+          costType: "material",
+          purchaseUrl: result.purchaseUrl,
+          purchaseStore: result.store ?? "",
+          purchasePrice: result.price,
+          purchaseVerified: result.trusted,
+          purchaseSource: "pesquisa",
+        },
+      ],
+    });
+    setFeedback({ tone: "ok", message: `"${result.description}" adicionado ao mapa com o link de compra.` });
+  }
+
+  function attachProductToSupplier(result: ProductSearchResult) {
+    const target = draft.suppliers.find((supplier) => supplier.name.trim()) ?? draft.suppliers[0];
+    if (!target) return;
+    updateSupplier(target.id, {
+      purchaseUrl: result.purchaseUrl,
+      purchaseStore: result.store ?? "",
+      purchaseVerified: result.trusted,
+      purchaseSource: "pesquisa",
+    });
+    setFeedback({ tone: "ok", message: `Link vinculado ao fornecedor ${target.name || "A"}.` });
+  }
+
+  function setSupplierLink(supplierId: string, raw: string) {
+    if (!raw.trim()) {
+      updateSupplier(supplierId, { purchaseUrl: undefined, purchaseStore: undefined, purchaseVerified: false, purchaseSource: "manual" });
+      return;
+    }
+    const link = parsePurchaseUrl(raw);
+    if (!link) {
+      setFeedback({ tone: "error", message: "Link do fornecedor inválido. Use um endereço completo http(s)." });
+      return;
+    }
+    updateSupplier(supplierId, {
+      purchaseUrl: link.url,
+      purchaseStore: link.store ?? "",
+      purchaseVerified: link.trusted,
+      purchaseSource: "manual",
+    });
   }
 
   async function searchProductsOnline() {
@@ -691,6 +744,25 @@ export function QuotationEditor({ initial, quotationId, protocol: initialProtoco
                           onChange={(event) => updateSupplier(supplier.id, { notes: event.target.value })}
                         />
                       </label>
+                      <div className="mt-2">
+                        <span className="label !text-[8.5px]">Site / e-commerce do fornecedor</span>
+                        <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
+                          <input
+                            className="field min-w-[180px] flex-1 !py-1.5 text-[11.5px]"
+                            placeholder="https://loja-do-fornecedor.com.br"
+                            inputMode="url"
+                            value={supplier.purchaseUrl ?? ""}
+                            onChange={(event) => updateSupplier(supplier.id, { purchaseUrl: event.target.value })}
+                            onBlur={(event) => setSupplierLink(supplier.id, event.target.value)}
+                          />
+                          {supplier.purchaseUrl && (
+                            <a href={supplier.purchaseUrl} target="_blank" rel="noopener noreferrer" className="text-[10.5px] font-bold text-brand-dark underline underline-offset-2">Abrir</a>
+                          )}
+                          {supplier.purchaseVerified && (
+                            <span className="rounded-full bg-success-soft px-2 py-0.5 text-[9px] font-bold uppercase tracking-[0.05em] text-success">Loja confiável</span>
+                          )}
+                        </div>
+                      </div>
                       <div className="mt-2 grid grid-cols-3 gap-2 rounded-lg bg-paper/70 px-3 py-2 text-[10.5px]">
                         <div><span className="block text-slate-500">Mão de obra</span><strong className="text-ink">{formatCurrency(breakdown.mao_obra.total)}</strong></div>
                         <div><span className="block text-slate-500">Material</span><strong className="text-ink">{formatCurrency(breakdown.material.total)}</strong></div>
@@ -855,10 +927,20 @@ export function QuotationEditor({ initial, quotationId, protocol: initialProtoco
                       Opcional. A IA preenche quando o link aparece no documento ou na pesquisa em lojas confiáveis. Você também pode colar o endereço manualmente.
                     </p>
                   </div>
-                  <button type="button" onClick={searchProductsOnline} disabled={searchingProducts} className="btn btn-ghost !py-1.5">
-                    <SearchIcon className="h-3.5 w-3.5" />
-                    {searchingProducts ? "Pesquisando…" : "Pesquisar online"}
-                  </button>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button type="button" onClick={searchProductsOnline} disabled={searchingProducts} className="btn btn-ghost !py-1.5">
+                      <SearchIcon className="h-3.5 w-3.5" />
+                      {searchingProducts ? "Pesquisando…" : "Pesquisar itens do mapa"}
+                    </button>
+                  </div>
+                </div>
+                <div className="mt-2.5">
+                  <ProductSearchPanel
+                    condominium={draft.condominium}
+                    onAddItem={addProductAsItem}
+                    onAttachToSupplier={attachProductToSupplier}
+                    hasSuppliers={draft.suppliers.some((supplier) => supplier.name.trim())}
+                  />
                 </div>
                 <ul className="mt-2 space-y-2.5">
                   {draft.items.filter((item) => item.description.trim()).length === 0 && (

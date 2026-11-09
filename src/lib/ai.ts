@@ -30,6 +30,8 @@ export type AiProviderInfo = {
 type RawSupplier = {
   name?: string;
   contact?: string;
+  purchaseUrl?: string;
+  purchaseStore?: string;
   deliveryDays?: string;
   paymentTerms?: string;
   validity?: string;
@@ -109,7 +111,8 @@ Regras obrigatórias:
 7. "quantity" deve ser numérica (default 1). Unidades comuns: un, serviço, mês, m², m, kg, L, cx, hora, vb (verba).
 8. Classifique "kind" como "servico" ou "produtos" e "category" escolhendo exatamente uma opção: ${CATEGORIES.join(" | ")}.
 9. Extraia prazo, pagamento, validade e contato. O campo "description" resume o escopo; "service" é o objeto curto.
-9.1. Se a proposta trouxer um link de compra, produto ou e-commerce, copie o endereço exato em "purchaseUrl". Nunca invente links: sem link no documento, deixe vazio.
+9.1. Se a proposta trouxer um link de compra, produto ou e-commerce, copie o endereço exato em "purchaseUrl" do item.
+9.2. Se o fornecedor for um e-commerce (loja virtual), informe a página/loja dele em "purchaseUrl" do fornecedor. Nunca invente links: sem link no documento, deixe vazio.
 10. Em "analysis", compare mão de obra e materiais quando discriminados, cobertura, valor global e condições. Informe diferenças de escopo e valores não discriminados. Não recomende uma proposta parcial como se cobrisse tudo.
 11. Responda exclusivamente com JSON válido, sem markdown. Não invente valores ausentes.
 12. Use a data de análise ${todayISO()} no formato AAAA-MM-DD.
@@ -146,6 +149,8 @@ const RAW_SCHEMA = {
           paymentTerms: { type: "string" },
           validity: { type: "string" },
           notes: { type: "string" },
+          purchaseUrl: { type: "string" },
+          purchaseStore: { type: "string" },
           proposalTotal: { type: ["number", "null"] },
         },
       },
@@ -314,15 +319,26 @@ function normalizeUnit(unit: string | undefined): string {
 function mapRaw(raw: RawExtraction, hints: ExtractionHints, mode: AiExtractionResult["mode"]) {
   const rawSuppliers = (raw.suppliers ?? []).map((supplier, originalIndex) => ({ supplier, originalIndex }))
     .filter(({ supplier }) => (supplier?.name ?? "").trim().length > 0).slice(0, 5);
-  const suppliers: Supplier[] = rawSuppliers.map(({ supplier }, index) => ({
-    id: `sup_${index}_${uid()}`,
-    name: (supplier.name || `Fornecedor ${String.fromCharCode(65 + index)}`).trim().slice(0, 160),
-    contact: (supplier.contact || "").trim().slice(0, 200),
-    deliveryDays: (supplier.deliveryDays || "").trim().slice(0, 80),
-    paymentTerms: (supplier.paymentTerms || "").trim().slice(0, 160),
-    validity: (supplier.validity || "").trim().slice(0, 80),
-    notes: (supplier.notes || "").trim().slice(0, 400),
-  }));
+  const suppliers: Supplier[] = rawSuppliers.map(({ supplier }, index) => {
+    const supplierLink = parsePurchaseUrl(supplier.purchaseUrl);
+    return {
+      id: `sup_${index}_${uid()}`,
+      name: (supplier.name || `Fornecedor ${String.fromCharCode(65 + index)}`).trim().slice(0, 160),
+      contact: (supplier.contact || "").trim().slice(0, 200),
+      deliveryDays: (supplier.deliveryDays || "").trim().slice(0, 80),
+      paymentTerms: (supplier.paymentTerms || "").trim().slice(0, 160),
+      validity: (supplier.validity || "").trim().slice(0, 80),
+      notes: (supplier.notes || "").trim().slice(0, 400),
+      ...(supplierLink
+        ? {
+            purchaseUrl: supplierLink.url,
+            purchaseStore: supplierLink.store ?? (supplier.purchaseStore || "").trim().slice(0, 80),
+            purchaseVerified: supplierLink.trusted,
+            purchaseSource: "documento" as const,
+          }
+        : {}),
+    };
+  });
 
   const safeSuppliers =
     suppliers.length > 0
