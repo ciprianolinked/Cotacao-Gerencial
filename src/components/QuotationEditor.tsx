@@ -16,7 +16,6 @@ import type {
 import { CATEGORIES, COST_TYPE_LABEL, COST_TYPES, MAX_SUPPLIERS, STATUS_LABEL, STATUS_STYLE, UNITS } from "@/lib/constants";
 import {
   buildNarrative,
-  checkCompleteness,
   computeMetrics,
   createItem,
   createSupplier,
@@ -74,9 +73,6 @@ export function QuotationEditor({ initial, quotationId, protocol: initialProtoco
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [searchingProducts, setSearchingProducts] = useState(false);
-  const [analysisFiles, setAnalysisFiles] = useState<File[]>([]);
-  const [reanalyzeSignal, setReanalyzeSignal] = useState(0);
-  const [completeness, setCompleteness] = useState<string[] | null>(null);
 
   const metrics = useMemo(() => computeMetrics(draft), [draft]);
 
@@ -182,12 +178,10 @@ export function QuotationEditor({ initial, quotationId, protocol: initialProtoco
     setFeedback({ tone: "ok", message: "Análise técnica recalculada com base nos valores atuais." });
   }
 
-  function applyExtraction(result: AiExtractionResult, files: AiFileMeta[], mode: ApplyMode = "replace", rawFiles: File[] = []) {
+  function applyExtraction(result: AiExtractionResult, files: AiFileMeta[], mode: ApplyMode = "replace") {
     const next = mode === "merge" ? mergeComplementary(draft, result, files) : mergeExtraction(draft, result, files);
     setDraft(next);
     setDirty(true);
-    setCompleteness(null);
-    if (rawFiles.length > 0) setAnalysisFiles(rawFiles);
     if (mode === "merge") {
       const changes = describeMerge(draft, next);
       setFeedback({
@@ -641,9 +635,6 @@ export function QuotationEditor({ initial, quotationId, protocol: initialProtoco
                       draft.items.some((item) => item.description.trim())
                     }
                     existingFileNames={draft.attachments.map((file) => file.name)}
-                    initialFiles={analysisFiles}
-                    onFilesChange={setAnalysisFiles}
-                    reanalyzeSignal={reanalyzeSignal}
                   />
                 </div>
               )}
@@ -797,21 +788,21 @@ export function QuotationEditor({ initial, quotationId, protocol: initialProtoco
                 }
               />
               <div className="mt-3 -mx-1 overflow-x-auto px-1 pb-1">
-                <table className="w-full min-w-[880px] border-separate border-spacing-0">
+                <table className="w-full min-w-[720px] border-separate border-spacing-0">
                   <thead>
                     <tr>
-                      <th className="sticky left-0 z-10 min-w-[240px] rounded-tl-lg bg-paper px-2 py-2 text-left text-[9.5px] font-extrabold uppercase tracking-[0.1em] text-slate-500">
+                      <th className="sticky left-0 z-10 w-[38%] rounded-tl-lg bg-paper px-2 py-2 text-left text-[9.5px] font-extrabold uppercase tracking-[0.1em] text-slate-500">
                         Item / descrição
                       </th>
-                      <th className="w-[76px] bg-paper px-1.5 py-2 text-center text-[9.5px] font-extrabold uppercase tracking-[0.1em] text-slate-500">
+                      <th className="w-[64px] bg-paper px-1.5 py-2 text-center text-[9.5px] font-extrabold uppercase tracking-[0.1em] text-slate-500">
                         Qtd
                       </th>
-                      <th className="w-[104px] bg-paper px-1.5 py-2 text-left text-[9.5px] font-extrabold uppercase tracking-[0.1em] text-slate-500">
+                      <th className="w-[92px] bg-paper px-1.5 py-2 text-left text-[9.5px] font-extrabold uppercase tracking-[0.1em] text-slate-500">
                         Un.
                       </th>
                       {draft.suppliers.map((supplier, index) => (
-                        <th key={supplier.id} className="w-[136px] bg-paper px-1.5 py-2 text-right text-[9.5px] font-extrabold uppercase tracking-[0.1em] text-slate-500">
-                          <span className="block leading-tight" title={supplier.name}>
+                        <th key={supplier.id} className="w-[104px] bg-paper px-1.5 py-2 text-right text-[9.5px] font-extrabold uppercase tracking-[0.1em] text-slate-500">
+                          <span className="block truncate" title={supplier.name}>
                             {String.fromCharCode(65 + index)} · {supplier.name || "Fornecedor"}
                           </span>
                           <span className="font-semibold normal-case tracking-normal text-[8.5px] text-slate-400">valor unit.</span>
@@ -835,8 +826,8 @@ export function QuotationEditor({ initial, quotationId, protocol: initialProtoco
                               </span>
                               <div className="min-w-0 flex-1">
                                 <textarea
-                                  className="field resize-y !py-2 text-[12.5px] leading-snug"
-                                  rows={3}
+                                  className="field resize-none !py-1.5 text-[12px]"
+                                  rows={2}
                                   placeholder="Descrição do item, material ou serviço"
                                   value={item.description}
                                   onChange={(event) => updateItem(item.id, { description: event.target.value })}
@@ -856,17 +847,15 @@ export function QuotationEditor({ initial, quotationId, protocol: initialProtoco
                             <input
                               type="number"
                               min={0}
-                              step="1"
-                              aria-label={`Quantidade do item ${itemIndex + 1}`}
-                              className="field !py-2 text-center text-[13px] font-bold tabular-nums"
+                              step="0.01"
+                              className="field !py-1.5 text-center text-[12px]"
                               value={item.quantity}
                               onChange={(event) => updateItem(item.id, { quantity: Number(event.target.value) || 0 })}
                             />
                           </td>
                           <td className="border-b border-line px-1.5 py-1.5">
                             <select
-                              className="field !py-2 text-[12px]"
-                              aria-label={`Unidade do item ${itemIndex + 1}`}
+                              className="field !py-1.5 text-[11.5px]"
                               value={item.unit}
                               onChange={(event) => updateItem(item.id, { unit: event.target.value })}
                             >
@@ -1193,52 +1182,6 @@ export function QuotationEditor({ initial, quotationId, protocol: initialProtoco
                 </button>
                 <button
                   type="button"
-                  onClick={() => {
-                    if (analysisFiles.length === 0) {
-                      setAiOpen(true);
-                      setFeedback({ tone: "error", message: "Nenhum arquivo guardado nesta sessão. Anexe as propostas na leitura com IA e depois use este botão." });
-                      return;
-                    }
-                    setAiOpen(true);
-                    setReanalyzeSignal((signal) => signal + 1);
-                    setFeedback({ tone: "ok", message: "Reanalisando a cotação com os mesmos arquivos, sem precisar reanexar." });
-                  }}
-                  className="btn btn-ghost w-full !justify-start"
-                >
-                  <SparklesIcon className="h-4 w-4" />
-                  Reanalisar cotação completa
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const issues = checkCompleteness(draft).map((issue) => issue.message);
-                    setCompleteness(issues);
-                    setFeedback({
-                      tone: issues.length ? "error" : "ok",
-                      message: issues.length
-                        ? `${issues.length} ponto(s) para conferir antes de concluir.`
-                        : "Mapa completo: todos os campos essenciais estão preenchidos.",
-                    });
-                  }}
-                  className="btn btn-ghost w-full !justify-start"
-                >
-                  <CheckIcon className="h-4 w-4" />
-                  Verificar preenchimento
-                </button>
-                {completeness !== null && (
-                  <div className="rounded-lg border border-line bg-paper/60 px-2.5 py-2">
-                    {completeness.length === 0 ? (
-                      <p className="text-[10.5px] font-semibold text-success">Nada pendente. Pode salvar e apresentar.</p>
-                    ) : (
-                      <ul className="max-h-40 space-y-1 overflow-auto text-[10.5px] leading-snug text-slate-600">
-                        {completeness.slice(0, 12).map((issue) => <li key={issue}>• {issue}</li>)}
-                        {completeness.length > 12 && <li>• …e mais {completeness.length - 12} ponto(s).</li>}
-                      </ul>
-                    )}
-                  </div>
-                )}
-                <button
-                  type="button"
                   onClick={regenerateAnalysis}
                   className="btn btn-ghost w-full !justify-start"
                 >
@@ -1374,12 +1317,12 @@ function MoneyInput({
 
   return (
     <div className="relative">
-      <span className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-[10px] font-bold text-slate-500">
+      <span className="pointer-events-none absolute left-1.5 top-1/2 -translate-y-1/2 text-[9.5px] font-bold text-slate-400">
         R$
       </span>
       <input
         inputMode="decimal"
-        className={`field !py-2 pl-8 pr-2 text-right text-[12.5px] font-semibold tabular-nums ${
+        className={`field !py-1.5 pl-6 text-right text-[12px] tabular-nums ${
           highlight ? "!border-success/50 !bg-success-soft font-bold text-success" : ""
         }`}
         placeholder="0,00"

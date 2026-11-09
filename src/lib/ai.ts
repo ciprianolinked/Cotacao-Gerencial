@@ -1,6 +1,6 @@
 import { ACCEPTED_UPLOAD_TYPES, CATEGORIES, MAX_FILES, MAX_FILE_BYTES, parsePurchaseUrl } from "./constants";
 import type { AiExtractionResult, QuotationKind, QuoteItem, Supplier } from "./types";
-import { checkCompleteness, parseCurrencyInput, round2, todayISO, uid } from "./quotation";
+import { parseCurrencyInput, round2, todayISO, uid } from "./quotation";
 import { getGeminiKey } from "./server/quotations";
 import { createGeminiInteractionDetailed, resolveGeminiModel, type GeminiInputPart } from "./server/gemini";
 import { searchProductsOnline } from "./server/product-search";
@@ -110,9 +110,9 @@ Regras obrigatórias:
 6. Unifique itens equivalentes entre propostas apenas quando a descrição, unidade e quantidade forem comparáveis. Se um fornecedor não cotou um item, deixe seu preço como null, não zero. Se quantidades ou escopos forem diferentes, registre linhas distintas e ressalvas.
 7. "quantity" deve ser numérica (default 1). Unidades comuns: un, serviço, mês, m², m, kg, L, cx, hora, vb (verba).
 8. Classifique "kind" como "servico" ou "produtos" e "category" escolhendo exatamente uma opção: ${CATEGORIES.join(" | ")}.
-9. Extraia TODAS as informações visíveis da proposta: contato (e-mail/telefone), prazo de entrega/execução, condições de pagamento, validade, observações (garantia, impostos, frete) e quantidades. Não deixe em branco nada que estiver legível no documento.
-9.1. Se a proposta ou o print trouxer um link de compra, produto ou e-commerce, copie o endereço COMPLETO em "purchaseUrl" do item — incluindo todo o caminho após o domínio (ex.: .../produto/475566/luminaria-solar-...). Nunca informe apenas o domínio quando existir a página do produto, e nunca invente links: sem link no documento, deixe vazio.
-9.2. Se o fornecedor for um e-commerce (loja virtual), informe a página/loja dele em "purchaseUrl" do fornecedor, também com o endereço mais completo visível. Nunca invente links: sem link no documento, deixe vazio.
+9. Extraia prazo, pagamento, validade e contato. O campo "description" resume o escopo; "service" é o objeto curto.
+9.1. Se a proposta trouxer um link de compra, produto ou e-commerce, copie o endereço exato em "purchaseUrl" do item.
+9.2. Se o fornecedor for um e-commerce (loja virtual), informe a página/loja dele em "purchaseUrl" do fornecedor. Nunca invente links: sem link no documento, deixe vazio.
 10. Em "analysis", compare mão de obra e materiais quando discriminados, cobertura, valor global e condições. Informe diferenças de escopo e valores não discriminados. Não recomende uma proposta parcial como se cobrisse tudo.
 11. Responda exclusivamente com JSON válido, sem markdown. Não invente valores ausentes.
 12. Use a data de análise ${todayISO()} no formato AAAA-MM-DD.
@@ -523,10 +523,6 @@ export async function extractQuotation({
       const mapped = mapRaw(raw, hints, "ia");
       if (!mapped.analysis.summary) {
         warnings.push("A IA não retornou parecer textual; a análise será gerada automaticamente pelos valores.");
-      }
-      // Conferência de gestor: aponta o que a leitura deixou incompleto.
-      for (const issue of checkCompleteness(mapped).slice(0, 8)) {
-        warnings.push(`Conferir: ${issue.message}`);
       }
       await enrichWithOnlineSearch(mapped);
       return {

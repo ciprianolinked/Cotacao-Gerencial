@@ -73,7 +73,7 @@ test("pesquisa com Google Search, descarta loja não confiável e trata preço",
     assert.match(registro.note, /fora da lista preferencial/i);
     assert.equal(generico.found, false);
     assert.equal(generico.purchaseUrl, "");
-    assert.ok(output.warnings.some((warning) => /sem o selo de loja confiável/i.test(warning)));
+    assert.ok(output.warnings.some((warning) => /fora da lista preferencial/i.test(warning)));
     assert.ok(output.warnings.some((warning) => /sem link encontrado/i.test(warning)));
   } finally {
     globalThis.fetch = original;

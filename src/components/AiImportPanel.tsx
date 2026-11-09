@@ -25,18 +25,13 @@ export type ApplyMode = "replace" | "merge";
 
 type AiImportPanelProps = {
   hints: { condominium?: string; service?: string; recipient?: string; description?: string };
-  onApply: (result: AiExtractionResult, files: AiFileMeta[], mode: ApplyMode, rawFiles: File[]) => void;
+  onApply: (result: AiExtractionResult, files: AiFileMeta[], mode: ApplyMode) => void;
   variant?: "hero" | "embedded";
   title?: string;
   ctaLabel?: string;
   /** Quando o mapa já tem fornecedores/itens, oferece complementar em vez de substituir. */
   hasExistingData?: boolean;
   existingFileNames?: string[];
-  /** Arquivos enviados antes (mantidos pelo editor) para reanalisar sem reanexar. */
-  initialFiles?: File[];
-  onFilesChange?: (files: File[]) => void;
-  /** Incremente para disparar uma nova análise com os arquivos atuais. */
-  reanalyzeSignal?: number;
 };
 
 function formatElapsed(seconds: number): string {
@@ -53,23 +48,8 @@ export function AiImportPanel({
   ctaLabel = "Analisar com IA",
   hasExistingData = false,
   existingFileNames = [],
-  initialFiles = [],
-  onFilesChange,
-  reanalyzeSignal = 0,
 }: AiImportPanelProps) {
-  const [files, setFiles] = useState<File[]>(initialFiles);
-  const filesRef = useRef<File[]>(initialFiles);
-  const analyzeRef = useRef<() => Promise<void>>(async () => {});
-  const lastSignalRef = useRef(reanalyzeSignal);
-
-  function syncFiles(next: File[] | ((current: File[]) => File[])) {
-    setFiles((current) => {
-      const value = typeof next === "function" ? (next as (current: File[]) => File[])(current) : next;
-      filesRef.current = value;
-      onFilesChange?.(value);
-      return value;
-    });
-  }
+  const [files, setFiles] = useState<File[]>([]);
   const [text, setText] = useState("");
   const [showText, setShowText] = useState(false);
   const [dragging, setDragging] = useState(false);
@@ -126,7 +106,7 @@ export function AiImportPanel({
         ? "Formato não suportado ou arquivo acima de 15 MB. Envie PDF, JPG, PNG ou WEBP."
         : null,
     );
-    syncFiles((current) => {
+    setFiles((current) => {
       const merged = [...current];
       for (const file of next) {
         if (!merged.some((entry) => entry.name === file.name && entry.size === file.size)) merged.push(file);
@@ -187,27 +167,15 @@ export function AiImportPanel({
     }
   }
 
-  analyzeRef.current = analyze;
-
   function apply() {
     if (!result) return;
     onApply(
       result,
       files.map((file) => ({ name: file.name, size: file.size, type: file.type || "application/pdf" })),
       mode,
-      [...filesRef.current],
     );
     setApplied(true);
   }
-
-  // Reanálise: o editor pede uma nova leitura com os arquivos já selecionados.
-  useEffect(() => {
-    if (reanalyzeSignal > 0 && reanalyzeSignal !== lastSignalRef.current) {
-      lastSignalRef.current = reanalyzeSignal;
-      if (!loading && filesRef.current.length > 0) void analyzeRef.current();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reanalyzeSignal]);
 
   const modeLabel = result?.mode === "ia" ? "Análise concluída pela IA" : "Pré-análise local (texto)";
   const showSetupHint = error !== null && /configurar ia|chave/i.test(error);
@@ -343,7 +311,7 @@ export function AiImportPanel({
                     disabled={loading}
                     onClick={(event) => {
                       event.stopPropagation();
-                      syncFiles((current) => current.filter((entry) => entry !== file));
+                      setFiles((current) => current.filter((entry) => entry !== file));
                       setResult(null);
                       setApplied(false);
                     }}
@@ -524,7 +492,7 @@ export function AiImportPanel({
                 type="button"
                 onClick={() => {
                   setResult(null);
-                  syncFiles([]);
+                  setFiles([]);
                   setText("");
                 }}
                 className="btn btn-ghost"

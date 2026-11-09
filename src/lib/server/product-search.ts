@@ -3,10 +3,7 @@ import { round2 } from "@/lib/quotation";
 import type { ProductSearchResult } from "@/lib/types";
 
 const GENERATE_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
-const INTERACTIONS_URL = "https://generativelanguage.googleapis.com/v1beta/interactions";
-const FALLBACK_MODEL = "gemini-3.1-flash-lite";
-const SEARCH_TIMEOUT_MS = 50_000;
-const SEARCH_BUDGET_MS = 100_000;
+const SEARCH_TIMEOUT_MS = 90_000;
 
 type RawSearchItem = {
   item?: number | string;
@@ -62,29 +59,10 @@ function parseJsonLoose(raw: string): RawSearchItem[] {
   throw new Error("A pesquisa não retornou a lista de produtos em formato válido.");
 }
 
-function extractText(data: unknown): string {
-  if (!data || typeof data !== "object") return "";
-  const generate = data as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
-  const fromGenerate = (generate.candidates ?? [])
-    .flatMap((candidate) => candidate.content?.parts ?? [])
-    .map((part) => part.text ?? "")
-    .join("\n");
-  if (fromGenerate.trim()) return fromGenerate;
-  const interaction = data as { output_text?: string; steps?: { type?: string; content?: { type?: string; text?: string }[] }[] };
-  return (
-    interaction.output_text ||
-    (interaction.steps ?? [])
-      .filter((step) => step.type === "model_output")
-      .flatMap((step) => step.content ?? [])
-      .map((part) => part.text ?? "")
-      .join("\n")
-  );
-}
-
 /**
  * Pesquisa preços/links com Google Search grounding no Gemini.
- * Links válidos são mantidos (com selo apenas para lojas preferenciais);
- * somente endereços inválidos são descartados.
+ * Somente links de domínios da lista confiável são aceitos; os demais são
+ * descartados e informados ao usuário.
  */
 export async function searchProductsOnline({
   descriptions,
@@ -103,99 +81,110 @@ export async function searchProductsOnline({
   if (items.length === 0) {
     return { results: [], warnings: ["Nenhum item descrito para pesquisar."] };
   }
-  const key = apiKey.trim();
-  if (!key) {
-    return { results: [], warnings: ["A pesquisa online usa a chave do Google Gemini em Configurar IA."] };
-  }
 
   const prompt = buildPrompt(items, hint);
-  const generateUrl = (candidate: string) => `${GENERATE_BASE}/${encodeURIComponent(candidate)}:generateContent`;
-  const attempts: { name: string; model: string; url: string; body: () => string }[] = [];
-  const models = [model, FALLBACK_MODEL].filter((candidate, index, list) => candidate && list.indexOf(candidate) === index);
-  for (const candidate of models) {
-    attempts.push({
-      name: `generateContent (${candidate})`,
-      model: candidate,
-      url: generateUrl(candidate),
+  const generateUrl = `${GENERATE_BASE}/${encodeURIComponent(model)}:generateContent`;
+  const interactionsUrl = `${GENERATE_BASE.replace("/models", "")}/interactions`;
+  const transports = [
+    {
+      name: "generateContent",
+      url: generateUrl,
       body: () => JSON.stringify({
         contents: [{ role: "user", parts: [{ text: prompt }] }],
         tools: [{ google_search: {} }],
         generationConfig: { thinkingConfig: { thinkingLevel: "low" } },
       }),
-    });
-  }
-  // Último recurso: mesma busca pela API Interactions.
-  attempts.push({
-    name: "interactions",
-    model: models[0],
-    url: INTERACTIONS_URL,
-    body: () => JSON.stringify({
-      model: models[0],
-      input: [{ type: "text", text: prompt }],
-      tools: [{ type: "google_search" }],
-      store: false,
-    }),
-  });
+    },
+    {
+      name: "interactions",
+      url: interactionsUrl,
+      body: () => JSON.stringify({
+        model,
+        input: [{ type: "text", text: prompt }],
+        tools: [{ type: "google_search" }],
+        store: false,
+      }),
+    },
+  ];
 
-  const deadline = Date.now() + SEARCH_BUDGET_MS;
-  const detailLines: string[] = [];
-  for (const attempt of attempts) {
-    const remaining = deadline - Date.now();
-    if (signal?.aborted) return { results: [], warnings: ["Pesquisa cancelada."] };
-    if (remaining < 15_000) break;
-    const timeout = AbortSignal.timeout(Math.min(SEARCH_TIMEOUT_MS, remaining));
-    const composed = signal ? AbortSignal.any([signal, timeout]) : timeout;
+  let text = "";
+  const warnings: string[] = [];
+  let lastError = "";
+
+  function extractText(data: unknown): string {
+    if (!data || typeof data !== "object") return "";
+    const generate = data as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
+    const fromGenerate = (generate.candidates ?? [])
+      .flatMap((candidate) => candidate.content?.parts ?? [])
+      .map((part) => part.text ?? "")
+      .join("\n");
+    if (fromGenerate.trim()) return fromGenerate;
+    const interaction = data as { output_text?: string; steps?: { type?: string; content?: { type?: string; text?: string }[] }[] };
+    return (
+      interaction.output_text ||
+      (interaction.steps ?? [])
+        .filter((step) => step.type === "model_output")
+        .flatMap((step) => step.content ?? [])
+        .map((part) => part.text ?? "")
+        .join("\n")
+    );
+  }
+
+  for (const transport of transports) {
     let response: Response | null = null;
-    try {
-      response = await fetch(attempt.url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-goog-api-key": key },
-        body: attempt.body(),
-        signal: composed,
-      });
-    } catch {
-      detailLines.push(`${attempt.name}: sem resposta (tempo esgotado ou conexão).`);
-      continue;
-    }
-    if (!response.ok) {
-      if (response.status === 429 || response.status >= 500) {
-        detailLines.push(`${attempt.name}: Google indisponível no momento (erro ${response.status}).`);
+    let transportError = "";
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      const timeout = AbortSignal.timeout(SEARCH_TIMEOUT_MS);
+      const composed = signal ? AbortSignal.any([signal, timeout]) : timeout;
+      try {
+        response = await fetch(transport.url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey.trim() },
+          body: transport.body(),
+          signal: composed,
+        });
+      } catch (error) {
+        transportError = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")
+          ? "A pesquisa online demorou mais que o esperado."
+          : "Não foi possível conectar ao serviço de pesquisa.";
+        if (attempt === 1) { await new Promise((resolve) => setTimeout(resolve, 1200)); continue; }
+        break;
+      }
+      if (response.ok) break;
+      const details = await response.text().catch(() => "");
+      transportError = response.status === 429 || response.status >= 500
+        ? "A pesquisa online está temporariamente indisponível no Google. Tente novamente em instantes."
+        : `A pesquisa online retornou erro ${response.status}. ${details.slice(0, 160)}`;
+      if (attempt === 1 && (response.status === 429 || response.status >= 500)) {
+        await new Promise((resolve) => setTimeout(resolve, 1200));
         continue;
       }
-      return {
-        results: [],
-        warnings: [
-          `A pesquisa online retornou erro ${response.status}. Verifique a chave e se o Google Search está disponível para este projeto no Google AI Studio.`,
-        ],
-      };
+      break;
     }
-    const text = extractText(await response.json().catch(() => null));
-    if (!text.trim()) {
-      detailLines.push(`${attempt.name}: resposta vazia.`);
-      continue;
+
+    if (response?.ok) {
+      const data = await response.json().catch(() => null);
+      text = extractText(data);
+      if (text.trim()) break;
+      transportError = "A pesquisa não retornou resultados. Tente descrever o produto com marca e modelo.";
     }
-    let raw: RawSearchItem[];
-    try {
-      raw = parseJsonLoose(text);
-    } catch {
-      detailLines.push(`${attempt.name}: formato inesperado.`);
-      continue;
-    }
-    return buildOutput(items, raw);
+    lastError = transportError || "Falha na pesquisa online.";
+    if (text.trim()) break;
+    warnings.push(`Busca via ${transport.name}: ${lastError}`);
   }
 
-  return {
-    results: [],
-    warnings: [
-      "Nenhum link encontrado nesta tentativa. Confira a conexão, a cota do projeto no Google AI Studio e tente novamente — ou cole o link manualmente.",
-      ...(detailLines.length ? [`Detalhes técnicos: ${detailLines.join(" ")}`] : []),
-    ],
-  };
-}
+  if (!text.trim()) {
+    return { results: [], warnings: warnings.length ? warnings : [lastError || "Falha na pesquisa online."] };
+  }
 
-function buildOutput(items: string[], raw: RawSearchItem[]): ProductSearchOutput {
-  const warnings: string[] = [];
-  const unverified = new Set<string>();
+  let raw: RawSearchItem[];
+  try {
+    raw = parseJsonLoose(text);
+  } catch {
+    return { results: [], warnings: [...warnings, "A pesquisa online retornou um formato inesperado. Tente novamente."] };
+  }
+
+  const rejected = new Set<string>();
   const results: ProductSearchResult[] = [];
   for (const entry of raw) {
     const index = Number(entry.item) - 1;
@@ -206,7 +195,7 @@ function buildOutput(items: string[], raw: RawSearchItem[]): ProductSearchOutput
     if (rawUrl && !link) {
       warnings.push(`O endereço sugerido para "${items[index]}" não é válido e foi descartado.`);
     } else if (link && !link.trusted) {
-      unverified.add(link.store ?? link.host);
+      rejected.add(link.store ?? link.host);
     }
     results.push({
       index,
@@ -225,8 +214,8 @@ function buildOutput(items: string[], raw: RawSearchItem[]): ProductSearchOutput
     });
   }
 
-  if (unverified.size > 0) {
-    warnings.push(`Links mantidos sem o selo de loja confiável: ${[...unverified].join(", ")}.`);
+  if (rejected.size > 0) {
+    warnings.push(`Links de lojas fora da lista preferencial foram mantidos sem o selo de loja confiável: ${[...rejected].join(", ")}.`);
   }
   const missing = items.filter((_, index) => !results.some((result) => result.index === index && result.found));
   if (missing.length > 0) {
