@@ -244,7 +244,8 @@ export async function buildMapPdf(draft: QuotationDraft, protocol: string): Prom
     const lowest = Math.min(...suppliers.map((supplier) => item.prices?.[supplier.id]).filter((value): value is number => value != null));
     const row = [
       String(index + 1).padStart(2, "0"),
-      item.description || "Item sem descrição",
+      (item.description || "Item sem descrição") +
+        (item.purchaseUrl ? `\nCompra: ${item.purchaseStore || "link"}${item.purchasePrice != null ? ` · ${formatCurrency(item.purchasePrice)}` : ""}${item.purchaseVerified ? " · loja confiável" : ""}` : ""),
       COST_TYPE_LABEL[item.costType ?? "nao_discriminado"],
       String(item.quantity || "—"),
       item.unit,

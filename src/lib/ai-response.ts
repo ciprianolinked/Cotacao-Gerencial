@@ -72,7 +72,7 @@ export async function readAiAnalysisResponse(
       throw new Error(INVALID_RESPONSE);
     }
     if (!event || typeof event !== "object") throw new Error(INVALID_RESPONSE);
-    if (event.type === "progress" && ["recebido", "analisando", "tentando_novamente", "alternativa"].includes(event.phase)) {
+    if (event.type === "progress" && ["recebido", "analisando", "tentando_novamente", "alternativa", "pesquisando"].includes(event.phase)) {
       onPhase?.(event.phase);
     } else if (event.type === "error") {
       throw new Error(typeof event.error === "string" ? event.error : INVALID_RESPONSE);

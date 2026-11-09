@@ -15,12 +15,14 @@ export async function POST(request: Request) {
     let files: UploadInput[] = [];
     let text = "";
     let hints: ExtractionHints = {};
+    let searchProducts = false;
     const rejected: string[] = [];
 
     if (contentType.includes("multipart/form-data")) {
       const form = await request.formData();
       const entries = form.getAll("files").filter((entry): entry is File => entry instanceof File);
       text = String(form.get("text") ?? "");
+      searchProducts = String(form.get("webSearch") ?? "") === "1";
       const rawHints = String(form.get("hints") ?? "");
       if (rawHints) {
         try {
@@ -51,10 +53,12 @@ export async function POST(request: Request) {
         files?: unknown;
         text?: unknown;
         hints?: unknown;
+        webSearch?: unknown;
       };
       files = validateUploads(payload.files);
       text = typeof payload.text === "string" ? payload.text : "";
       hints = (payload.hints ?? {}) as ExtractionHints;
+      searchProducts = payload.webSearch === true;
     }
 
     if (files.length === 0 && !text.trim()) {
@@ -70,7 +74,7 @@ export async function POST(request: Request) {
     }
 
     async function runAnalysis(signal: AbortSignal, onPhase?: (phase: AiAnalysisPhase) => void) {
-      return extractQuotation({ files, text, hints, signal, onPhase });
+      return extractQuotation({ files, text, hints, signal, onPhase, searchProducts });
     }
 
     if (new URL(request.url).searchParams.get("stream") === "1") {

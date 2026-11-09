@@ -1,8 +1,9 @@
-import { ACCEPTED_UPLOAD_TYPES, CATEGORIES, MAX_FILES, MAX_FILE_BYTES } from "./constants";
+import { ACCEPTED_UPLOAD_TYPES, CATEGORIES, MAX_FILES, MAX_FILE_BYTES, parsePurchaseUrl } from "./constants";
 import type { AiExtractionResult, QuotationKind, QuoteItem, Supplier } from "./types";
 import { parseCurrencyInput, round2, todayISO, uid } from "./quotation";
 import { getGeminiKey } from "./server/quotations";
 import { createGeminiInteractionDetailed, resolveGeminiModel, type GeminiInputPart } from "./server/gemini";
+import { searchProductsOnline } from "./server/product-search";
 import type { AiAnalysisPhase } from "./ai-stream";
 
 export type UploadInput = {
@@ -42,6 +43,9 @@ type RawItem = {
   unit?: string;
   quantity?: number | null;
   prices?: (number | string | null)[];
+  purchaseUrl?: string;
+  purchaseStore?: string;
+  purchasePrice?: number | string | null;
 };
 
 type RawExtraction = {
@@ -105,6 +109,7 @@ Regras obrigatórias:
 7. "quantity" deve ser numérica (default 1). Unidades comuns: un, serviço, mês, m², m, kg, L, cx, hora, vb (verba).
 8. Classifique "kind" como "servico" ou "produtos" e "category" escolhendo exatamente uma opção: ${CATEGORIES.join(" | ")}.
 9. Extraia prazo, pagamento, validade e contato. O campo "description" resume o escopo; "service" é o objeto curto.
+9.1. Se a proposta trouxer um link de compra, produto ou e-commerce, copie o endereço exato em "purchaseUrl". Nunca invente links: sem link no documento, deixe vazio.
 10. Em "analysis", compare mão de obra e materiais quando discriminados, cobertura, valor global e condições. Informe diferenças de escopo e valores não discriminados. Não recomende uma proposta parcial como se cobrisse tudo.
 11. Responda exclusivamente com JSON válido, sem markdown. Não invente valores ausentes.
 12. Use a data de análise ${todayISO()} no formato AAAA-MM-DD.
@@ -157,6 +162,9 @@ const RAW_SCHEMA = {
           unit: { type: "string" },
           quantity: { type: ["number", "null"] },
           prices: { type: "array", items: { type: ["number", "null"] } },
+          purchaseUrl: { type: "string" },
+          purchaseStore: { type: "string" },
+          purchasePrice: { type: ["number", "null"] },
         },
       },
     },
@@ -343,6 +351,12 @@ function mapRaw(raw: RawExtraction, hints: ExtractionHints, mode: AiExtractionRe
       prices[supplier.id] = parsed !== null && Number.isFinite(parsed) ? round2(parsed) : null;
     });
     const quantity = typeof item.quantity === "number" && Number.isFinite(item.quantity) ? item.quantity : 1;
+    const link = parsePurchaseUrl(item.purchaseUrl);
+    const purchasePrice = typeof item.purchasePrice === "number"
+      ? item.purchasePrice
+      : typeof item.purchasePrice === "string"
+        ? parseCurrencyInput(item.purchasePrice)
+        : null;
     return {
       id: `itm_${itemIndex}_${uid()}`,
       description: (item.description || `Item ${itemIndex + 1}`).trim().slice(0, 600),
@@ -350,6 +364,15 @@ function mapRaw(raw: RawExtraction, hints: ExtractionHints, mode: AiExtractionRe
       unit: normalizeUnit(item.unit),
       quantity: quantity > 0 ? quantity : 1,
       prices,
+      ...(link
+        ? {
+            purchaseUrl: link.url,
+            purchaseStore: link.store ?? (item.purchaseStore || "").trim().slice(0, 80),
+            purchasePrice: purchasePrice !== null && purchasePrice >= 0 ? round2(purchasePrice) : null,
+            purchaseVerified: link.trusted,
+            purchaseSource: "documento" as const,
+          }
+        : {}),
     };
   });
 
@@ -413,15 +436,51 @@ export async function extractQuotation({
   hints,
   signal,
   onPhase,
+  searchProducts = false,
 }: {
   files: UploadInput[];
   text: string;
   hints: ExtractionHints;
   signal?: AbortSignal;
   onPhase?: (phase: AiAnalysisPhase) => void;
+  /** Pesquisa preços e links de compra em lojas confiáveis após a extração. */
+  searchProducts?: boolean;
 }): Promise<AiExtractionResult> {
   const config = await getAiConfig();
   const warnings: string[] = [];
+
+  /** Preenche links de compra somente quando o item ainda não tem um link do documento. */
+  async function enrichWithOnlineSearch(draft: { items: QuoteItem[] }) {
+    if (!searchProducts) return;
+    if (!config.geminiKey) {
+      warnings.push("A pesquisa online de produtos exige a chave do Google Gemini em Configurar IA.");
+      return;
+    }
+    const targets = draft.items.filter((item) => item.description.trim().length > 2).slice(0, 12);
+    if (targets.length === 0) return;
+    onPhase?.("pesquisando");
+    try {
+      const output = await searchProductsOnline({
+        descriptions: targets.map((item) => item.description),
+        apiKey: config.geminiKey,
+        model: config.model,
+        hint: hints.condominium,
+        signal,
+      });
+      warnings.push(...output.warnings);
+      for (const result of output.results) {
+        const item = targets[result.index];
+        if (!item || !result.found || !result.purchaseUrl || item.purchaseUrl) continue;
+        item.purchaseUrl = result.purchaseUrl;
+        item.purchaseStore = result.store ?? "";
+        item.purchasePrice = result.price;
+        item.purchaseVerified = result.trusted;
+        item.purchaseSource = "pesquisa";
+      }
+    } catch (error) {
+      warnings.push(error instanceof Error ? error.message : "A pesquisa online de produtos não pôde ser concluída.");
+    }
+  }
   const fileSummaries = files.map((file) => ({
     name: file.name,
     note: file.type.startsWith("image/") ? "Imagem lida pelo analista de IA" : "PDF lido pelo analista de IA",
@@ -449,6 +508,7 @@ export async function extractQuotation({
       if (!mapped.analysis.summary) {
         warnings.push("A IA não retornou parecer textual; a análise será gerada automaticamente pelos valores.");
       }
+      await enrichWithOnlineSearch(mapped);
       return {
         draft: mapped,
         mode: "ia",
@@ -470,8 +530,10 @@ export async function extractQuotation({
 
   if (text.trim()) {
     const parsed = parseQuotationText(text, hints);
+    const localDraft = mapRaw(parsed.raw, hints, "local");
+    await enrichWithOnlineSearch(localDraft);
     return {
-      draft: mapRaw(parsed.raw, hints, "local"),
+      draft: localDraft,
       mode: "local",
       provider: "Pré-análise local de texto",
       warnings: [

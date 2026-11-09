@@ -7,6 +7,7 @@ import type { ReactNode } from "react";
 import type {
   AiExtractionResult,
   CostType,
+  ProductSearchResult,
   QuotationDraft,
   QuotationStatus,
   QuoteItem,
@@ -26,8 +27,10 @@ import {
   supplierCostBreakdown,
   todayISO,
 } from "@/lib/quotation";
-import { mergeExtraction } from "@/lib/extraction";
+import { describeMerge, mergeComplementary, mergeExtraction } from "@/lib/extraction";
+import type { ApplyMode } from "@/components/AiImportPanel";
 import { saveBase64File, type PdfDownload } from "@/lib/download";
+import { parsePurchaseUrl } from "@/lib/constants";
 import { MapDocument } from "./MapDocument";
 import { AiImportPanel, type AiFileMeta } from "./AiImportPanel";
 import {
@@ -41,6 +44,7 @@ import {
   PlusIcon,
   PrinterIcon,
   SaveIcon,
+  SearchIcon,
   SparklesIcon,
   TrashIcon,
   TrendIcon,
@@ -67,6 +71,7 @@ export function QuotationEditor({ initial, quotationId, protocol: initialProtoco
   const [aiOpen, setAiOpen] = useState(!quotationId);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [downloading, setDownloading] = useState(false);
+  const [searchingProducts, setSearchingProducts] = useState(false);
 
   const metrics = useMemo(() => computeMetrics(draft), [draft]);
 
@@ -172,16 +177,104 @@ export function QuotationEditor({ initial, quotationId, protocol: initialProtoco
     setFeedback({ tone: "ok", message: "Análise técnica recalculada com base nos valores atuais." });
   }
 
-  function applyExtraction(result: AiExtractionResult, files: AiFileMeta[]) {
-    setDraft((current) => mergeExtraction(current, result, files));
+  function applyExtraction(result: AiExtractionResult, files: AiFileMeta[], mode: ApplyMode = "replace") {
+    const next = mode === "merge" ? mergeComplementary(draft, result, files) : mergeExtraction(draft, result, files);
+    setDraft(next);
     setDirty(true);
-    setFeedback({
-      tone: "ok",
-      message:
-        result.mode === "ia"
-          ? "Documentos analisados pela IA. Revise os campos e salve o mapa."
-          : "Pré-análise aplicada ao mapa. Revise os valores antes de salvar.",
+    if (mode === "merge") {
+      const changes = describeMerge(draft, next);
+      setFeedback({
+        tone: "ok",
+        message: changes.length
+          ? `Mapa complementado: ${changes.join(", ")}. Confira os valores e salve.`
+          : "Nenhum dado novo foi encontrado nos arquivos enviados. O mapa atual foi preservado.",
+      });
+    } else {
+      setFeedback({
+        tone: "ok",
+        message:
+          result.mode === "ia"
+            ? "Documentos analisados pela IA. Revise os campos e salve o mapa."
+            : "Pré-análise aplicada ao mapa. Revise os valores antes de salvar.",
+      });
+    }
+  }
+
+  function setPurchaseLink(itemId: string, raw: string) {
+    if (!raw.trim()) {
+      updateItem(itemId, {
+        purchaseUrl: undefined,
+        purchaseStore: undefined,
+        purchasePrice: null,
+        purchaseVerified: false,
+        purchaseSource: "manual",
+      });
+      return;
+    }
+    const link = parsePurchaseUrl(raw);
+    if (!link) {
+      setFeedback({ tone: "error", message: "Link inválido. Informe um endereço http(s) completo, como https://loja.com.br/produto." });
+      return;
+    }
+    updateItem(itemId, {
+      purchaseUrl: link.url,
+      purchaseStore: link.store ?? "",
+      purchaseVerified: link.trusted,
+      purchaseSource: "manual",
     });
+    if (!link.trusted) {
+      setFeedback({ tone: "ok", message: `Link salvo. ${link.host} não está na lista de lojas confiáveis, por isso não é marcado como verificado.` });
+    }
+  }
+
+  async function searchProductsOnline() {
+    const targets = draft.items.filter((item) => item.description.trim().length > 2);
+    if (targets.length === 0) {
+      setFeedback({ tone: "error", message: "Descreva ao menos um item para pesquisar." });
+      return;
+    }
+    setSearchingProducts(true);
+    try {
+      const response = await fetch("/api/ai/product-search", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items: targets.map((item) => item.description), condominium: draft.condominium }),
+      });
+      const data = (await response.json()) as { results?: ProductSearchResult[]; warnings?: string[]; error?: string };
+      if (!response.ok || !data.results) throw new Error(data.error || "Não foi possível pesquisar os produtos.");
+      const byId = new Map<number, ProductSearchResult>();
+      data.results.forEach((result) => byId.set(result.index, result));
+      let found = 0;
+      setDraft((current) => ({
+        ...current,
+        items: current.items.map((item) => {
+          const index = targets.findIndex((target) => target.id === item.id);
+          if (index < 0) return item;
+          const result = byId.get(index);
+          if (!result?.found || !result.purchaseUrl) return item;
+          found += 1;
+          return {
+            ...item,
+            purchaseUrl: result.purchaseUrl,
+            purchaseStore: result.store ?? "",
+            purchasePrice: result.price,
+            purchaseVerified: result.trusted,
+            purchaseSource: "pesquisa" as const,
+          };
+        }),
+      }));
+      setDirty(true);
+      setFeedback({
+        tone: found > 0 ? "ok" : "error",
+        message: found > 0
+          ? `Pesquisa concluída: ${found} item(ns) com link em loja confiável. Revise antes de salvar.${data.warnings?.length ? ` ${data.warnings[0]}` : ""}`
+          : `Nenhum link confiável encontrado.${data.warnings?.length ? ` ${data.warnings.join(" ")}` : ""}`,
+      });
+    } catch (error) {
+      setFeedback({ tone: "error", message: error instanceof Error ? error.message : "Falha na pesquisa online." });
+    } finally {
+      setSearchingProducts(false);
+    }
   }
 
   async function persist(): Promise<string | undefined> {
@@ -483,6 +576,12 @@ export function QuotationEditor({ initial, quotationId, protocol: initialProtoco
                     onApply={applyExtraction}
                     variant="embedded"
                     ctaLabel="Analisar propostas e preencher"
+                    hasExistingData={
+                      Boolean(quotationId) ||
+                      draft.suppliers.some((supplier) => supplier.name.trim()) ||
+                      draft.items.some((item) => item.description.trim())
+                    }
+                    existingFileNames={draft.attachments.map((file) => file.name)}
                   />
                 </div>
               )}
@@ -747,6 +846,55 @@ export function QuotationEditor({ initial, quotationId, protocol: initialProtoco
               <p className="mt-2 text-[10.5px] text-slate-500">
                 Totais calculados por quantidade × valor unitário. Itens sem preço não entram no total; melhor proposta e economia consideram apenas fornecedores com todos os itens cotados.
               </p>
+
+              <div className="mt-3 rounded-xl border border-line bg-paper/40 px-3 py-3">
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div>
+                    <p className="text-[12px] font-extrabold text-ink">Links de compra dos produtos</p>
+                    <p className="mt-0.5 max-w-md text-[10.5px] leading-snug text-slate-500">
+                      Opcional. A IA preenche quando o link aparece no documento ou na pesquisa em lojas confiáveis. Você também pode colar o endereço manualmente.
+                    </p>
+                  </div>
+                  <button type="button" onClick={searchProductsOnline} disabled={searchingProducts} className="btn btn-ghost !py-1.5">
+                    <SearchIcon className="h-3.5 w-3.5" />
+                    {searchingProducts ? "Pesquisando…" : "Pesquisar online"}
+                  </button>
+                </div>
+                <ul className="mt-2 space-y-2.5">
+                  {draft.items.filter((item) => item.description.trim()).length === 0 && (
+                    <li className="text-[11px] text-slate-500">Descreva os itens acima para registrar links de compra.</li>
+                  )}
+                  {draft.items.filter((item) => item.description.trim()).map((item, index) => (
+                    <li key={item.id}>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="w-6 shrink-0 text-[9.5px] font-bold text-slate-400">{String(index + 1).padStart(2, "0")}</span>
+                        <span className="min-w-0 flex-1 truncate text-[11px] font-semibold text-ink" title={item.description}>{item.description}</span>
+                        {item.purchaseVerified && (
+                          <span className="rounded-full bg-success-soft px-2 py-0.5 text-[9px] font-bold uppercase tracking-[0.06em] text-success">Loja confiável</span>
+                        )}
+                        {item.purchaseSource === "pesquisa" && (
+                          <span className="rounded-full bg-brand-soft px-2 py-0.5 text-[9px] font-bold uppercase tracking-[0.06em] text-brand-dark">Pesquisa IA</span>
+                        )}
+                      </div>
+                      <div className="mt-1 flex flex-wrap items-center gap-1.5 pl-7">
+                        <input
+                          className="field min-w-[200px] flex-1 !py-1.5 text-[11px]"
+                          value={item.purchaseUrl ?? ""}
+                          placeholder="https://loja.com.br/produto"
+                          inputMode="url"
+                          onChange={(event) => updateItem(item.id, { purchaseUrl: event.target.value })}
+                          onBlur={(event) => setPurchaseLink(item.id, event.target.value)}
+                        />
+                        {item.purchaseUrl && (
+                          <a href={item.purchaseUrl} target="_blank" rel="noopener noreferrer" className="text-[10.5px] font-bold text-brand-dark underline underline-offset-2">Abrir</a>
+                        )}
+                        {item.purchasePrice != null && <span className="text-[10.5px] font-bold text-ink">{formatCurrency(item.purchasePrice)}</span>}
+                        {item.purchaseStore && <span className="text-[10px] text-slate-500">{item.purchaseStore}</span>}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </div>
             </section>
 
             {/* Análise */}

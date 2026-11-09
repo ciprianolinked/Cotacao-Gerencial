@@ -57,6 +57,56 @@ export const KIND_LABEL: Record<QuotationKind, string> = {
  */
 export const NATURE_LABEL: Record<string, string> = KIND_LABEL;
 
+/**
+ * Lojas usadas na pesquisa online de produtos. A IA só pode devolver links
+ * destes domínios; qualquer outro endereço é descartado e sinalizado.
+ */
+export const TRUSTED_STORES: { domain: string; label: string }[] = [
+  { domain: "leroymerlin.com.br", label: "Leroy Merlin" },
+  { domain: "sodimac.com.br", label: "Sodimac" },
+  { domain: "obramax.com.br", label: "Obramax" },
+  { domain: "telhanorte.com.br", label: "Telhanorte" },
+  { domain: "cem.com.br", label: "C&C" },
+  { domain: "cassol.com.br", label: "Cassol" },
+  { domain: "balaroti.com.br", label: "Balaroti" },
+  { domain: "madeiramadeira.com.br", label: "MadeiraMadeira" },
+  { domain: "amazon.com.br", label: "Amazon Brasil" },
+  { domain: "magazineluiza.com.br", label: "Magazine Luiza" },
+  { domain: "mercadolivre.com.br", label: "Mercado Livre" },
+  { domain: "casasbahia.com.br", label: "Casas Bahia" },
+  { domain: "ferramentasgerais.com.br", label: "Ferramentas Gerais" },
+  { domain: "lojadomecanico.com.br", label: "Loja do Mecânico" },
+  { domain: "tigre.com.br", label: "Tigre" },
+  { domain: "decorluz.com.br", label: "Decorflex" },
+  { domain: "fischer.com.br", label: "Fischer" },
+  { domain: "camicado.com.br", label: "Camicado" },
+];
+
+export const TRUSTED_STORE_DOMAINS = TRUSTED_STORES.map((store) => store.domain);
+
+/** Normaliza um endereço de compra e confirma se pertence a uma loja confiável. */
+export function parsePurchaseUrl(raw: unknown): { url: string; host: string; store: string | null; trusted: boolean } | null {
+  if (typeof raw !== "string") return null;
+  const value = raw.trim();
+  if (!value || value.length > 500) return null;
+  let parsed: URL;
+  try {
+    parsed = new URL(value.startsWith("http") ? value : `https://${value}`);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+  const host = parsed.hostname.toLowerCase().replace(/^www\./, "");
+  if (!host.includes(".") || host.endsWith(".local")) return null;
+  const store = TRUSTED_STORES.find((entry) => host === entry.domain || host.endsWith(`.${entry.domain}`));
+  return {
+    url: parsed.toString().slice(0, 500),
+    host,
+    store: store?.label ?? null,
+    trusted: Boolean(store),
+  };
+}
+
 export const MAX_SUPPLIERS = 5;
 export const MAX_FILES = 6;
 export const MAX_FILE_BYTES = 15 * 1024 * 1024;

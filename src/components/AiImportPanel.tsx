@@ -21,12 +21,17 @@ type AiStatus = {
   maxTotalUploadBytes?: number | null;
 };
 
+export type ApplyMode = "replace" | "merge";
+
 type AiImportPanelProps = {
   hints: { condominium?: string; service?: string; recipient?: string; description?: string };
-  onApply: (result: AiExtractionResult, files: AiFileMeta[]) => void;
+  onApply: (result: AiExtractionResult, files: AiFileMeta[], mode: ApplyMode) => void;
   variant?: "hero" | "embedded";
   title?: string;
   ctaLabel?: string;
+  /** Quando o mapa já tem fornecedores/itens, oferece complementar em vez de substituir. */
+  hasExistingData?: boolean;
+  existingFileNames?: string[];
 };
 
 function formatElapsed(seconds: number): string {
@@ -41,6 +46,8 @@ export function AiImportPanel({
   variant = "embedded",
   title = "Leitura inteligente de propostas",
   ctaLabel = "Analisar com IA",
+  hasExistingData = false,
+  existingFileNames = [],
 }: AiImportPanelProps) {
   const [files, setFiles] = useState<File[]>([]);
   const [text, setText] = useState("");
@@ -53,6 +60,8 @@ export function AiImportPanel({
   const [result, setResult] = useState<AiExtractionResult | null>(null);
   const [applied, setApplied] = useState(false);
   const [status, setStatus] = useState<AiStatus | null>(null);
+  const [webSearch, setWebSearch] = useState(true);
+  const [mode, setMode] = useState<ApplyMode>(hasExistingData ? "merge" : "replace");
   const inputRef = useRef<HTMLInputElement>(null);
   const requestRef = useRef<AbortController | null>(null);
 
@@ -134,6 +143,7 @@ export function AiImportPanel({
       files.forEach((file) => form.append("files", file));
       form.append("text", text);
       form.append("hints", JSON.stringify(hints));
+      form.append("webSearch", webSearch ? "1" : "0");
 
       const response = await fetch("/api/ai/extract?stream=1", {
         method: "POST",
@@ -159,7 +169,11 @@ export function AiImportPanel({
 
   function apply() {
     if (!result) return;
-    onApply(result, files.map((file) => ({ name: file.name, size: file.size, type: file.type || "application/pdf" })));
+    onApply(
+      result,
+      files.map((file) => ({ name: file.name, size: file.size, type: file.type || "application/pdf" })),
+      mode,
+    );
     setApplied(true);
   }
 
@@ -174,7 +188,9 @@ export function AiImportPanel({
         ? "A conexão com o Google falhou. Tentando novamente…"
         : phase === "alternativa"
           ? "Tentando uma alternativa compatível do Gemini…"
-          : "Aguardando o resultado da análise da IA…";
+          : phase === "pesquisando"
+            ? "Pesquisando produtos em lojas confiáveis…"
+            : "Aguardando o resultado da análise da IA…";
   const showGoogleHelp = error !== null && /Google|Gemini|cota/i.test(error);
 
   return (
@@ -360,6 +376,42 @@ export function AiImportPanel({
             )}
           </div>
         )}
+
+        <div className="mt-3 space-y-2 rounded-xl border border-line bg-paper/50 px-3 py-2.5">
+          <label className="flex items-start gap-2">
+            <input
+              type="checkbox"
+              className="mt-0.5 h-4 w-4 accent-[#181447]"
+              checked={webSearch}
+              disabled={loading}
+              onChange={(event) => setWebSearch(event.target.checked)}
+            />
+            <span className="text-[11.5px] leading-snug text-slate-600">
+              <strong className="text-ink">Pesquisar produtos e links de compra em lojas confiáveis</strong> (opcional).
+              A IA usa a busca do Google restrita a lojas conhecidas de materiais e ferragens. Pode deixar desmarcado para
+              analisar apenas os documentos enviados.
+            </span>
+          </label>
+          {hasExistingData && (
+            <fieldset className="rounded-lg border border-line bg-white px-2.5 py-2">
+              <legend className="px-1 text-[9.5px] font-bold uppercase tracking-[0.1em] text-slate-500">Como aplicar esta análise</legend>
+              <label className="mt-1 flex items-start gap-2">
+                <input type="radio" name="apply-mode" className="mt-0.5 h-3.5 w-3.5 accent-[#181447]" checked={mode === "merge"} disabled={loading} onChange={() => setMode("merge")} />
+                <span className="text-[11.5px] leading-snug text-slate-600"><strong className="text-ink">Completar o mapa atual</strong> — soma aos {existingFileNames.length > 0 ? `${existingFileNames.length} arquivo(s) já analisado(s)` : "dados já preenchidos"}, sem apagar preços existentes.</span>
+              </label>
+              <label className="mt-1 flex items-start gap-2">
+                <input type="radio" name="apply-mode" className="mt-0.5 h-3.5 w-3.5 accent-[#181447]" checked={mode === "replace"} disabled={loading} onChange={() => setMode("replace")} />
+                <span className="text-[11.5px] leading-snug text-slate-600"><strong className="text-ink">Substituir os dados</strong> — usa somente o resultado desta análise.</span>
+              </label>
+            </fieldset>
+          )}
+          {existingFileNames.length > 0 && (
+            <p className="text-[10px] leading-snug text-slate-500">
+              Anexos já no mapa: {existingFileNames.slice(0, 4).join(", ")}{existingFileNames.length > 4 ? "…" : ""}. O
+              aplicativo guarda os dados extraídos; para somar um novo arquivo, envie-o novamente junto desta análise.
+            </p>
+          )}
+        </div>
 
         <div className="mt-3.5 flex flex-wrap items-center justify-between gap-2">
           <p className="max-w-sm text-[10.5px] leading-snug text-slate-500">

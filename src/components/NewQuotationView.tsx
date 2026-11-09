@@ -6,7 +6,7 @@ import type { AiExtractionResult, QuotationDraft, QuotationKind } from "@/lib/ty
 import { CATEGORIES } from "@/lib/constants";
 import { createEmptyDraft, formatDateLong, todayISO } from "@/lib/quotation";
 import { mergeExtraction } from "@/lib/extraction";
-import { AiImportPanel, type AiFileMeta } from "./AiImportPanel";
+import { AiImportPanel, type AiFileMeta, type ApplyMode } from "./AiImportPanel";
 import { QuotationEditor } from "./QuotationEditor";
 import { ArrowLeftIcon, ArrowRightIcon, CheckIcon, SparklesIcon } from "./icons";
 
@@ -34,7 +34,8 @@ export function NewQuotationView({ condominiums }: { condominiums: string[] }) {
     category,
   };
 
-  function applyExtraction(result: AiExtractionResult, files: AiFileMeta[]) {
+  function applyExtraction(result: AiExtractionResult, files: AiFileMeta[], _mode: ApplyMode = "replace") {
+    // Em um mapa novo sempre partimos do contexto informado, sem dados anteriores.
     const base = createEmptyDraft(context);
     setDraft(mergeExtraction(base, result, files));
   }

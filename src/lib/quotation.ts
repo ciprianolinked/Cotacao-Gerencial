@@ -7,7 +7,7 @@ import type {
   QuoteItem,
   Supplier,
 } from "./types";
-import { CATEGORIES, MAX_SUPPLIERS } from "./constants";
+import { CATEGORIES, MAX_SUPPLIERS, parsePurchaseUrl } from "./constants";
 
 export function uid(prefix = ""): string {
   const random = Math.random().toString(36).slice(2, 9);
@@ -335,6 +335,24 @@ function nullableNumber(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+/** Aceita apenas endereços http(s) válidos; links inválidos são descartados. */
+function normalizedPurchase(item: Record<string, unknown>) {
+  const link = parsePurchaseUrl(item.purchaseUrl);
+  if (!link) return {};
+  const sourceValue = asString(item.purchaseSource, "manual");
+  const purchaseSource = ["manual", "documento", "pesquisa"].includes(sourceValue)
+    ? (sourceValue as "manual" | "documento" | "pesquisa")
+    : "manual";
+  const price = nullableNumber(item.purchasePrice);
+  return {
+    purchaseUrl: link.url,
+    purchaseStore: link.store ?? asString(item.purchaseStore).slice(0, 80),
+    purchasePrice: price !== null && price >= 0 ? round2(price) : null,
+    purchaseVerified: link.trusted,
+    purchaseSource,
+  };
+}
+
 export function normalizeDraft(input: unknown): QuotationDraft {
   const source = (input ?? {}) as Record<string, unknown>;
   const rawSuppliers = Array.isArray(source.suppliers) ? source.suppliers : [];
@@ -367,6 +385,7 @@ export function normalizeDraft(input: unknown): QuotationDraft {
       quantity: Math.max(0, asNumber(item.quantity, 1)),
       prices,
       costType: item.costType === "mao_obra" || item.costType === "material" ? item.costType : "nao_discriminado",
+      ...normalizedPurchase(item),
     };
   });
 

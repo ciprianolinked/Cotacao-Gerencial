@@ -20,6 +20,28 @@ export type QuoteItem = {
   prices: Record<string, number | null>;
   // Registros anteriores continuam válidos; itens antigos são considerados não discriminados.
   costType?: CostType;
+  /** Link de compra (informado manualmente, extraído do documento ou achado na pesquisa). */
+  purchaseUrl?: string;
+  /** Loja identificada a partir do domínio do link. */
+  purchaseStore?: string;
+  /** Preço encontrado na pesquisa online, quando houver. */
+  purchasePrice?: number | null;
+  /** Verdadeiro quando o link pertence à lista de lojas confiáveis. */
+  purchaseVerified?: boolean;
+  /** Origem do link: manual, documento ou pesquisa online. */
+  purchaseSource?: "manual" | "documento" | "pesquisa";
+};
+
+export type ProductSearchResult = {
+  index: number;
+  description: string;
+  found: boolean;
+  store: string | null;
+  productName: string;
+  price: number | null;
+  purchaseUrl: string;
+  trusted: boolean;
+  note: string;
 };
 
 /** Valores informados e confirmados pela equipe após uma contratação. */

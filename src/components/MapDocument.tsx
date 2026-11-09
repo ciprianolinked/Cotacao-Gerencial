@@ -117,7 +117,17 @@ export function MapDocument({ draft, protocol, generatedAt }: MapDocumentProps) 
                 return (
                   <tr key={item.id}>
                     <td className="text-slate-500">{String(index + 1).padStart(2, "0")}</td>
-                    <td className="font-medium">{item.description || "Item sem descrição"}<div className="text-[8px] font-semibold text-slate-500">{COST_TYPE_LABEL[item.costType ?? "nao_discriminado"]}</div></td>
+                    <td className="font-medium">
+                      {item.description || "Item sem descrição"}
+                      <div className="text-[8px] font-semibold text-slate-500">{COST_TYPE_LABEL[item.costType ?? "nao_discriminado"]}</div>
+                      {item.purchaseUrl && (
+                        <div className="text-[8px] text-brand-dark">
+                          Link de compra{item.purchaseStore ? ` (${item.purchaseStore})` : ""}
+                          {item.purchasePrice != null ? ` · ${formatCurrency(item.purchasePrice)}` : ""}
+                          {item.purchaseVerified ? " · loja confiável" : ""}
+                        </div>
+                      )}
+                    </td>
                     <td className="num text-center">{item.quantity || "—"}</td>
                     <td className="text-slate-600">{item.unit}</td>
                     {suppliers.map((supplier) => {
