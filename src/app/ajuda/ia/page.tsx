@@ -105,12 +105,12 @@ export default function AjudaIaPage() {
         <ol className="mt-3 grid gap-2 sm:grid-cols-2">
           {[
             {
-              model: "gemini-3.5-flash-lite",
-              note: "O mais rápido, econômico e estável · padrão recomendado",
+              model: "gemini-4-hydrogen",
+              note: "Equilíbrio entre velocidade e inteligência · cota gratuita · padrão",
             },
             {
-              model: "gemini-4-hydrogen",
-              note: "Equilíbrio entre velocidade e inteligência · cota gratuita",
+              model: "gemini-3.5-flash-lite",
+              note: "O mais rápido e econômico · ideal para leitura de documentos",
             },
             {
               model: "gemini-3.8-flash",

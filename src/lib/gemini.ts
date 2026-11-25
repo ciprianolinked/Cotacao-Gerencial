@@ -15,172 +15,8 @@ import {
   type Supplier,
 } from "./types";
 
-/**
- * Ordem de preferência dos modelos Gemini.
- * 1º gemini-3.5-flash-lite — mais rápido, econômico e estável na cota gratuita
- * 2º gemini-4-hydrogen — equilíbrio entre velocidade e inteligência
- * Demais: fallback automático caso algum modelo apresente 503/429/lentidão.
- */
-export const MODEL_CANDIDATES = [
-  "gemini-3.5-flash-lite",
-  "gemini-4-hydrogen",
-  "gemini-3.8-flash",
-  "gemini-3.1-flash-lite",
-  "gemini-2.5-flash-lite",
-] as const;
-
-export const SELECTABLE_MODELS: {
-  id: string;
-  label: string;
-  description: string;
-}[] = [
-  {
-    id: "gemini-3.5-flash-lite",
-    label: "gemini-3.5-flash-lite (recomendado · mais rápido e econômico)",
-    description: "Baixa latência, alta disponibilidade na cota gratuita",
-  },
-  {
-    id: "gemini-4-hydrogen",
-    label: "gemini-4-hydrogen (equilíbrio velocidade e inteligência)",
-    description: "Alterna automaticamente para 3.5-flash-lite em caso de 503",
-  },
-  {
-    id: "gemini-3.8-flash",
-    label: "gemini-3.8-flash",
-    description: "Modelo intermediário para documentos complexos",
-  },
-  {
-    id: "gemini-3.1-flash-lite",
-    label: "gemini-3.1-flash-lite",
-    description: "Fallback econômico da série 3.1",
-  },
-];
-
-function buildEndpoint(model: string, apiKey: string): string {
-  return `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
-    model
-  )}:generateContent?key=${encodeURIComponent(apiKey)}`;
-}
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-export interface GeminiCallResult {
-  json: Record<string, unknown>;
-  modelUsed: string;
-  attempts: { model: string; ok: boolean; detail?: string }[];
-}
-
-interface FallbackOptions {
-  timeoutMs?: number;
-  maxAttemptsPerModel?: number;
-  totalBudgetMs?: number;
-}
-
-export async function callGeminiWithFallback(
-  apiKey: string,
-  preferredModel: string,
-  body: Record<string, unknown>,
-  options: FallbackOptions = {}
-): Promise<GeminiCallResult> {
-  const timeoutMs = options.timeoutMs ?? 20_000;
-  const maxAttemptsPerModel = options.maxAttemptsPerModel ?? 1;
-  const totalBudgetMs = options.totalBudgetMs ?? 50_000;
-  const startedAt = Date.now();
-
-  const ordered = [
-    preferredModel,
-    ...MODEL_CANDIDATES.filter((m) => m !== preferredModel),
-  ];
-
-  const attempts: GeminiCallResult["attempts"] = [];
-  let lastError = "Não foi possível comunicar com o Google Gemini.";
-
-  for (const model of ordered) {
-    for (let attempt = 1; attempt <= maxAttemptsPerModel; attempt++) {
-      const elapsed = Date.now() - startedAt;
-      const remaining = totalBudgetMs - elapsed;
-      if (remaining < 2_500) {
-        break;
-      }
-      const effectiveTimeout = Math.min(timeoutMs, remaining - 500);
-
-      try {
-        const res = await fetch(buildEndpoint(model, apiKey), {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-          signal: AbortSignal.timeout(effectiveTimeout),
-        });
-
-        if (res.ok) {
-          const json = (await res.json()) as Record<string, unknown>;
-          attempts.push({ model, ok: true });
-          return { json, modelUsed: model, attempts };
-        }
-
-        const errData = (await res.json().catch(() => ({}))) as {
-          error?: { message?: string; status?: string };
-        };
-        const msg = errData.error?.message || `HTTP ${res.status}`;
-        lastError = `[${model}] ${msg}`;
-
-        // Erros de chave/permissão: falha imediata
-        if (
-          (res.status === 400 || res.status === 401 || res.status === 403) &&
-          /api key|permission|unauthenticated|invalid|expired/i.test(msg)
-        ) {
-          attempts.push({ model, ok: false, detail: `HTTP ${res.status}` });
-          throw new Error(
-            `Chave inválida ou sem permissão: ${msg}. Gere uma nova chave em aistudio.google.com/apikey.`
-          );
-        }
-
-        // 429 ou 5xx: pula direto para o próximo modelo se maxAttemptsPerModel === 1
-        attempts.push({ model, ok: false, detail: `HTTP ${res.status}` });
-        if ((res.status === 429 || res.status >= 500) && attempt < maxAttemptsPerModel) {
-          await sleep(800);
-          continue;
-        }
-        break;
-      } catch (err) {
-        if (err instanceof Error && /Chave inválida/.test(err.message)) {
-          throw err;
-        }
-        const isTimeout =
-          err instanceof Error &&
-          (err.name === "TimeoutError" || /timeout|aborted/i.test(err.message));
-        const detail = isTimeout ? "timeout" : "rede indisponível";
-        lastError = `[${model}] ${detail}`;
-        attempts.push({ model, ok: false, detail });
-        break;
-      }
-    }
-
-    if (Date.now() - startedAt >= totalBudgetMs - 2_500) {
-      break;
-    }
-  }
-
-  const usedFallbacks = attempts.length > 0;
-  throw new Error(
-    usedFallbacks
-      ? `O Google não conseguiu concluir a análise em nenhum modelo disponível (503/instabilidade). Tentados: ${[
-          ...new Set(attempts.map((a) => a.model)),
-        ].join(", ")}. Seus arquivos continuam selecionados — tente novamente em instantes ou verifique a cota do Gemini.`
-      : lastError
-  );
-}
-
-function extractTextFromGemini(json: Record<string, unknown>): string {
-  const candidates = json.candidates as
-    | Array<{ content?: { parts?: Array<{ text?: string }> } }>
-    | undefined;
-  const parts = candidates?.[0]?.content?.parts ?? [];
-  return parts
-    .map((p) => p.text ?? "")
-    .join("\n")
-    .trim();
-}
+import { callGeminiWithFallback, extractTextFromGemini, GeminiError, type GeminiCallOptions } from "./gemini-transport";
+export { MODEL_CANDIDATES, callGeminiWithFallback, testGeminiConnection, GeminiError } from "./gemini-transport";
 
 function parseJsonBlock<T>(raw: string): T {
   const cleaned = raw
@@ -190,41 +26,11 @@ function parseJsonBlock<T>(raw: string): T {
   const start = cleaned.indexOf("{");
   const end = cleaned.lastIndexOf("}");
   const slice = start >= 0 && end > start ? cleaned.slice(start, end + 1) : cleaned;
-  return JSON.parse(slice) as T;
-}
-
-export async function testGeminiConnection(
-  apiKey: string,
-  preferredModel: string
-): Promise<{ ok: boolean; model: string; message: string }> {
-  const { modelUsed, attempts } = await callGeminiWithFallback(
-    apiKey,
-    preferredModel,
-    {
-      contents: [
-        {
-          parts: [{ text: "Responda apenas com a palavra OK." }],
-        },
-      ],
-      generationConfig: { maxOutputTokens: 10 },
-    },
-    {
-      timeoutMs: 7_500,
-      maxAttemptsPerModel: 1,
-      totalBudgetMs: 24_000,
-    }
-  );
-
-  const fallbackNote =
-    modelUsed !== preferredModel
-      ? ` (fallback automático a partir de ${preferredModel}; ${attempts.length} tentativa(s))`
-      : "";
-
-  return {
-    ok: true,
-    model: modelUsed,
-    message: `Conexão confirmada com ${modelUsed}.${fallbackNote}`,
-  };
+  try {
+    return JSON.parse(slice) as T;
+  } catch {
+    throw new GeminiError("GEMINI_INVALID_RESPONSE", "O Google retornou um resultado que não pôde ser interpretado. Seus documentos não foram alterados; tente novamente.", 502);
+  }
 }
 
 export async function extractQuotationWithGemini(params: {
@@ -242,6 +48,7 @@ export async function extractQuotationWithGemini(params: {
     category?: string;
   };
   searchProducts?: boolean;
+  callOptions?: GeminiCallOptions;
 }): Promise<{ draft: QuotationData; modelUsed: string; warnings: string[] }> {
   const prompt = `Você é um analista sênior de governança condominial da Gerencial.
 Analise os documentos e/ou textos de propostas comerciais enviados abaixo e estruture um Mapa de Cotação padronizado em JSON puro (sem markdown).
@@ -327,11 +134,7 @@ REGRAS RIGOROSAS:
     params.apiKey,
     params.model,
     body,
-    {
-      timeoutMs: 22_000,
-      maxAttemptsPerModel: 1,
-      totalBudgetMs: 48_000,
-    }
+    params.callOptions
   );
 
   const rawText = extractTextFromGemini(json);
@@ -504,6 +307,7 @@ export async function searchProductsWithGemini(params: {
   apiKey: string;
   model: string;
   items: string[];
+  callOptions?: GeminiCallOptions;
 }): Promise<{ results: ProductSearchResult[]; warnings: string[] }> {
   const domainsList = TRUSTED_STORES.map((s) => s.domain).join(", ");
   const prompt = `Pesquise os seguintes produtos no Brasil dando prioridade a lojas confiáveis (${domainsList}):
@@ -528,20 +332,11 @@ Se não encontrar preço exato, use price: null. Nunca invente URLs falsas; use 
   let json: Record<string, unknown>;
   let modelUsed = params.model;
   try {
-    const res = await callGeminiWithFallback(
-      params.apiKey,
-      params.model,
-      {
-        contents: [{ parts: [{ text: prompt }] }],
-        tools: [{ google_search: {} }],
-        generationConfig: { temperature: 0.1 },
-      },
-      {
-        timeoutMs: 14_000,
-        maxAttemptsPerModel: 1,
-        totalBudgetMs: 28_000,
-      }
-    );
+    const res = await callGeminiWithFallback(params.apiKey, params.model, {
+      contents: [{ parts: [{ text: prompt }] }],
+      tools: [{ google_search: {} }],
+      generationConfig: { temperature: 0.1 },
+    }, params.callOptions);
     json = res.json;
     modelUsed = res.modelUsed;
   } catch (err) {

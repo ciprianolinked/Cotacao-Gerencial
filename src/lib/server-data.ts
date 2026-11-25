@@ -2,7 +2,6 @@ import { desc, eq, sql } from "drizzle-orm";
 import { db, isDatabaseConfigured } from "@/db";
 import { ensureSchema } from "@/db/bootstrap";
 import {
-  appSettings,
   condominiums,
   pdfDownloads,
   quotations,
@@ -14,13 +13,7 @@ import type {
   QuotationRecord,
 } from "./types";
 
-export const DEFAULT_GEMINI_MODEL = "gemini-3.5-flash-lite";
-
-export function maskApiKey(key: string): string {
-  const trimmed = key.trim();
-  if (trimmed.length <= 8) return "••••••••";
-  return `${trimmed.slice(0, 4)}••••${trimmed.slice(-4)}`;
-}
+export { DEFAULT_GEMINI_MODEL, getAiConfig, maskApiKey } from "./ai-settings";
 
 export function formatDatabaseError(error: unknown): string {
   if (!isDatabaseConfigured()) {
@@ -40,70 +33,6 @@ export function formatDatabaseError(error: unknown): string {
     return "Erro de certificado SSL ao conectar ao PostgreSQL. Confira os parâmetros da string DATABASE_URL.";
   }
   return "Não foi possível conectar ao banco de dados PostgreSQL no momento.";
-}
-
-export async function getAiConfig(): Promise<{
-  configured: boolean;
-  source: "env" | "db" | "none";
-  apiKey: string | null;
-  maskedKey: string | null;
-  model: string;
-}> {
-  const envKey = process.env.GEMINI_API_KEY?.trim() || null;
-  const envModel = process.env.GEMINI_MODEL?.trim() || DEFAULT_GEMINI_MODEL;
-
-  let dbKey: string | null = null;
-  let dbModel: string | null = null;
-
-  if (isDatabaseConfigured()) {
-    try {
-      await ensureSchema();
-      const [modelRow, dbKeyRow] = await Promise.all([
-        db
-          .select()
-          .from(appSettings)
-          .where(eq(appSettings.key, "gemini_model"))
-          .limit(1),
-        db
-          .select()
-          .from(appSettings)
-          .where(eq(appSettings.key, "gemini_api_key"))
-          .limit(1),
-      ]);
-      dbModel = modelRow[0]?.value?.trim() || null;
-      dbKey = dbKeyRow[0]?.value?.trim() || null;
-    } catch (err) {
-      console.warn("getAiConfig: fallback para env vars (banco indisponível):", err);
-    }
-  }
-
-  const model = dbModel || envModel;
-
-  if (dbKey) {
-    return {
-      configured: true,
-      source: "db",
-      apiKey: dbKey,
-      maskedKey: maskApiKey(dbKey),
-      model,
-    };
-  }
-  if (envKey) {
-    return {
-      configured: true,
-      source: "env",
-      apiKey: envKey,
-      maskedKey: maskApiKey(envKey),
-      model,
-    };
-  }
-  return {
-    configured: false,
-    source: "none",
-    apiKey: null,
-    maskedKey: null,
-    model,
-  };
 }
 
 export async function listQuotations(): Promise<QuotationRecord[]> {

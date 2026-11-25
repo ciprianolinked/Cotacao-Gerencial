@@ -67,3 +67,22 @@ Plataforma de governança condominial da **Gerencial** para elaborar, comparar, 
    - `GEMINI_MODEL` *(opcional, padrão `gemini-4-hydrogen`)*
 4. Faça o deploy. Na primeira requisição, o bootstrap automático (`src/db/bootstrap.ts`) cria todas as tabelas e colunas que faltarem (inclusive `cnpj` e `contact_phone`) e valida a conexão.
 5. Verifique o status de produção em `/api/health`.
+
+## Correção de salvamento de chave e identidade visual
+
+- `POST /api/ai/config` **somente salva** a chave e o modelo em uma transação PostgreSQL. Não aguarda o Google. A resposta `saved: true` confirma a persistência.
+- A tela então faz um `PUT /api/ai/config` independente para testar a conexão. Se o Google demorar ou retornar erro, a chave continua salva e a interface distingue as duas etapas.
+- **Testar conexão** usa a chave digitada quando o campo está preenchido. Com o campo vazio, testa a configuração cadastrada. Testar uma chave nova não a salva automaticamente.
+- O modelo que responder com a chave cadastrada é memorizado para as próximas leituras. Regravar a mesma chave não redefine esse modelo. As alternativas dependem da disponibilidade da conta Google.
+- As tentativas possuem prazo individual e prazo **total** (teste: até 22 segundos; leitura/busca: até 40 segundos por chamada, dentro de um prazo compartilhado da rota). A rota de configuração permite 60 segundos, com margem para acesso ao banco e resposta JSON.
+- Respostas textuais/HTML da infraestrutura, inclusive `FUNCTION_INVOCATION_TIMEOUT`, são tratadas sem mostrar `Unexpected token` nem conteúdo bruto ao usuário. Logs de configuração registram apenas código e identificador de diagnóstico; nunca chave, SQL ou parâmetros.
+- A configuração de IA verifica apenas sua tabela de configurações; não aguarda o bootstrap completo dos mapas durante cada operação de credenciais.
+- A logo e o símbolo oficiais estão incorporados em `src/lib/brand-assets.ts`. O componente `BrandLogo`, os PDFs e `/api/brand/logo` / `/api/brand/simbolo` usam esses bytes originais. Assim, continuam disponíveis mesmo se uma exportação omitir arquivos binários de `public/`. Não remova esse módulo ao publicar.
+
+### Testes de regressão
+
+- `node --test tests/*.test.mjs` — testes unitários, respostas não JSON, fallback, prazos totais e integridade da marca.
+- `RUN_DB_TESTS=1 node --test tests/ai-config-regression.test.mjs` — testes com PostgreSQL **de desenvolvimento**. Usam chaves sintéticas e chamadas Google simuladas; restauram os registros de configuração ao terminar. Não execute contra um banco de produção.
+- Com a aplicação já iniciada: `npx playwright install chromium` e `node tests/configuration.browser.mjs` — verifica salvar/testar, resposta de timeout da Vercel, campo preservado após falha e carregamento da logo no desktop/mobile. As chamadas de configuração são simuladas no navegador, sem alterar uma chave real.
+
+A aprovação dos testes locais não substitui os logs da publicação na Vercel. Publique o código atualizado e use o identificador de referência mostrado pela interface para investigar eventuais falhas específicas do ambiente.

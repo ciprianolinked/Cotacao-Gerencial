@@ -13,8 +13,8 @@ import {
   Upload,
 } from "lucide-react";
 import { formatSize } from "@/lib/calculations";
-import { safeJson } from "@/lib/http";
 import type { QuotationData } from "@/lib/types";
+import { fetchApiJson } from "@/lib/http-client";
 
 interface AiUploadPanelProps {
   context: {
@@ -55,8 +55,7 @@ export function AiUploadPanel({
   }>({ checked: false, configured: false, model: "" });
 
   useEffect(() => {
-    fetch("/api/ai/status")
-      .then((r) => safeJson<{ configured?: boolean; model?: string }>(r))
+    fetchApiJson<{ configured: boolean; model: string }>("/api/ai/status")
       .then((d) =>
         setAiStatus({
           checked: true,
@@ -104,19 +103,11 @@ export function AiUploadPanel({
       fd.append("searchProducts", String(searchProducts));
       fd.append("context", JSON.stringify(context));
 
-      const res = await fetch("/api/ai/extract", {
-        method: "POST",
-        body: fd,
-      });
-      const json = await safeJson<{
-        error?: string;
-        mode?: string;
-        draft?: QuotationData;
+      const json = await fetchApiJson<{
+        mode: "ia" | "manual";
+        draft: QuotationData;
         warnings?: string[];
-      }>(res);
-      if (!res.ok || !json.draft) {
-        throw new Error(json.error || "Falha ao analisar propostas.");
-      }
+      }>("/api/ai/extract", { method: "POST", body: fd });
 
       await onExtracted({
         mode: json.mode === "ia" ? "ia" : "manual",
@@ -160,7 +151,7 @@ export function AiUploadPanel({
         ) : aiStatus.configured ? (
           <span className="inline-flex items-center gap-1.5 rounded-full bg-success-soft px-2.5 py-1 text-[10px] font-bold text-success">
             <span className="h-1.5 w-1.5 rounded-full bg-success" />
-            Gemini ativo
+            Chave cadastrada
           </span>
         ) : (
           <Link
@@ -310,11 +301,9 @@ export function AiUploadPanel({
               <span>{error}</span>
             </div>
             <p className="mt-1.5 pl-6 text-[10.5px] leading-snug text-red-600">
-              O sistema já tentou automaticamente os modelos{" "}
-              <strong>gemini-3.5-flash-lite</strong> e{" "}
-              <strong>gemini-4-hydrogen</strong> (e demais fallbacks) antes de
-              falhar. Seus arquivos continuam selecionados — você pode tentar
-              novamente sem perdê-los.
+              Seus arquivos continuam selecionados. A alternância de modelos
+              ocorre durante a análise, dentro do prazo da operação; consulte
+              acima o motivo da falha antes de tentar novamente.
             </p>
             <div className="mt-2.5 flex flex-wrap items-center gap-2 pl-6">
               <a

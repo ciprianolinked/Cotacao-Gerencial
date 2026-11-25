@@ -1,24 +1,22 @@
 import { NextResponse } from "next/server";
-import { getAiConfig } from "@/lib/server-data";
+import { DEFAULT_GEMINI_MODEL, getAiConfig, publicAiConfig } from "@/lib/ai-settings";
+import { databaseErrorCode } from "@/db/settings";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 export const maxDuration = 30;
 
 export async function GET() {
   try {
-    const cfg = await getAiConfig();
-    return NextResponse.json({
-      configured: cfg.configured,
-      source: cfg.source,
-      maskedKey: cfg.maskedKey,
-      model: cfg.model,
-      provider: "Google Gemini",
-    });
+    const config = await getAiConfig({ strict: true });
+    return NextResponse.json({ ...publicAiConfig(config), provider: "Google Gemini" }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
-    console.error("GET /api/ai/status error:", error);
-    return NextResponse.json(
-      { configured: false, source: "none", maskedKey: null, model: "", provider: "Google Gemini" },
-      { status: 500 }
-    );
+    console.error("AI status unavailable", { code: databaseErrorCode(error) });
+    return NextResponse.json({
+      error: "Não foi possível consultar a configuração de IA no banco.",
+      code: "AI_SETTINGS_UNAVAILABLE",
+      configured: false, source: "none", maskedKey: null,
+      model: DEFAULT_GEMINI_MODEL, provider: "Google Gemini",
+    }, { status: 503, headers: { "Cache-Control": "no-store" } });
   }
 }

@@ -1,5 +1,6 @@
 "use client";
 
+import { BrandLogo } from "@/components/BrandLogo";
 import {
   computeSummary,
   formatCurrency,
@@ -10,7 +11,6 @@ import {
   supplierCostBreakdown,
 } from "@/lib/calculations";
 import { COST_TYPE_LABEL, type CostType, type QuotationData } from "@/lib/types";
-import { BrandLogo } from "./BrandLogo";
 
 interface QuotationDocumentSheetProps {
   data: QuotationData;

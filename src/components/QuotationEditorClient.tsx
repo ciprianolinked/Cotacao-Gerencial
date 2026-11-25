@@ -38,7 +38,6 @@ import {
   todayISO,
   uid,
 } from "@/lib/calculations";
-import { safeJson } from "@/lib/http";
 import {
   CATEGORIES,
   STATUS_META,
@@ -148,7 +147,7 @@ export function QuotationEditorClient({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      const json = await safeJson<{ error?: string }>(res);
+      const json = await res.json();
       if (!res.ok) {
         throw new Error(json.error || "Não foi possível salvar o mapa.");
       }
@@ -176,12 +175,8 @@ export function QuotationEditorClient({
       const res = await fetch(`/api/quotations/${quotationId}/pdf`, {
         method: "POST",
       });
-      const json = await safeJson<{
-        error?: string;
-        fileName?: string;
-        base64?: string;
-      }>(res);
-      if (!res.ok || !json.base64 || !json.fileName) {
+      const json = await res.json();
+      if (!res.ok || !json.base64) {
         throw new Error(json.error || "Falha ao gerar o PDF.");
       }
       saveBase64Pdf(json.fileName, json.base64);
@@ -381,11 +376,7 @@ export function QuotationEditorClient({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ items: queries, condominium: data.condominium }),
       });
-      const json = await safeJson<{
-        error?: string;
-        results?: ProductSearchResult[];
-        warnings?: string[];
-      }>(res);
+      const json = await res.json();
       if (!res.ok) {
         throw new Error(json.error || "Não foi possível pesquisar os itens.");
       }

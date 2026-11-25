@@ -55,7 +55,10 @@ function buildPoolConfig(rawUrl: string): PoolConfig {
     ssl: isLocal || explicitDisable ? undefined : { rejectUnauthorized: false },
     max: 5,
     idleTimeoutMillis: 15_000,
-    connectionTimeoutMillis: 10_000,
+    connectionTimeoutMillis: 5_000,
+    statement_timeout: 7_000,
+    lock_timeout: 2_000,
+    query_timeout: 8_000,
   };
 }
 

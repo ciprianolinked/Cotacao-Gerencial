@@ -8,11 +8,8 @@ export const metadata: Metadata = {
   description:
     "Plataforma de governança condominial da Gerencial para elaborar, comparar e aprovar mapas de cotação com apoio de inteligência artificial gratuita.",
   icons: {
-    icon: [
-      { url: "/favicon.ico", sizes: "any" },
-      { url: "/identidade/simbolo.png", type: "image/png" },
-    ],
-    apple: "/identidade/simbolo.png",
+    icon: [{ url: "/api/brand/simbolo?v=2", type: "image/png", sizes: "400x400" }],
+    apple: "/api/brand/simbolo?v=2",
   },
 };
 

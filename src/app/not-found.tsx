@@ -1,6 +1,6 @@
+import { BrandLogo } from "@/components/BrandLogo";
 import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
-import { BrandLogo } from "@/components/BrandLogo";
 
 export default function NotFound() {
   return (

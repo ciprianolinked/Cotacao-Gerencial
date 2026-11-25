@@ -1,5 +1,4 @@
-import { readFile } from "node:fs/promises";
-import path from "node:path";
+import { GERENCIAL_LOGO_DATA_URI } from "./brand-assets";
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from "pdf-lib";
 import {
   computeSummary,
@@ -111,21 +110,7 @@ function truncateText(
 }
 
 async function embedLogo(pdfDoc: PDFDocument) {
-  try {
-    const bytes = await readFile(
-      path.join(/*turbopackIgnore: true*/ process.cwd(), "public", "identidade", "logo.png")
-    );
-    return await pdfDoc.embedPng(bytes);
-  } catch {
-    try {
-      const bytes = await readFile(
-        path.join(/*turbopackIgnore: true*/ process.cwd(), "src", "assets", "logo.png")
-      );
-      return await pdfDoc.embedPng(bytes);
-    } catch {
-      return null;
-    }
-  }
+  return pdfDoc.embedPng(GERENCIAL_LOGO_DATA_URI);
 }
 
 const PAGE_W = 595.28; // A4 portrait

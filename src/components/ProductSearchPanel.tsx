@@ -3,7 +3,6 @@
 import { useState } from "react";
 import { ExternalLink, Loader2, Plus, Search, X } from "lucide-react";
 import { formatCurrency } from "@/lib/calculations";
-import { safeJson } from "@/lib/http";
 import { TRUSTED_STORES, type ProductSearchResult } from "@/lib/types";
 
 interface ProductSearchPanelProps {
@@ -47,11 +46,7 @@ export function ProductSearchPanel({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ items, condominium }),
       });
-      const data = await safeJson<{
-        error?: string;
-        results?: ProductSearchResult[];
-        warnings?: string[];
-      }>(res);
+      const data = await res.json();
       if (!res.ok) {
         throw new Error(data.error || "Não foi possível pesquisar.");
       }

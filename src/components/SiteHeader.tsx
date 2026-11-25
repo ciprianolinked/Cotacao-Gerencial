@@ -1,9 +1,9 @@
 "use client";
 
+import { BrandLogo } from "@/components/BrandLogo";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Plus, Sparkles } from "lucide-react";
-import { BrandLogo } from "./BrandLogo";
 
 const NAV_ITEMS = [
   { href: "/", label: "Painel", match: (p: string) => p === "/" },

@@ -6,8 +6,8 @@ const nextConfig: NextConfig = {
   },
   serverExternalPackages: ["pg"],
   outputFileTracingIncludes: {
-    "/api/quotations/[id]/pdf": ["./public/identidade/**/*", "./src/assets/**/*"],
-    "/api/indicators/pdf": ["./public/identidade/**/*", "./src/assets/**/*"],
+    "/api/quotations/[id]/pdf": ["./public/identidade/**/*"],
+    "/api/indicators/pdf": ["./public/identidade/**/*"],
   },
 };
 

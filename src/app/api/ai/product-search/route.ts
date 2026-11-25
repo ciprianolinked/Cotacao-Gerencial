@@ -1,11 +1,12 @@
 import { NextResponse } from "next/server";
-import { getAiConfig } from "@/lib/server-data";
+import { getAiConfig } from "@/lib/ai-settings";
 import { searchProductsWithGemini } from "@/lib/gemini";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
 export async function POST(request: Request) {
+  const deadlineMs = Date.now() + 48_000;
   try {
     const body = (await request.json()) as {
       items?: string[];
@@ -24,7 +25,7 @@ export async function POST(request: Request) {
       );
     }
 
-    const aiCfg = await getAiConfig();
+    const aiCfg = await getAiConfig({ strict: true });
     if (!aiCfg.configured || !aiCfg.apiKey) {
       return NextResponse.json(
         {
@@ -39,6 +40,7 @@ export async function POST(request: Request) {
       apiKey: aiCfg.apiKey,
       model: aiCfg.model,
       items,
+      callOptions: { deadlineMs },
     });
 
     return NextResponse.json({ results, warnings });

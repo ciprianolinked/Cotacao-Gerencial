@@ -1,12 +1,13 @@
 import { NextResponse } from "next/server";
-import { getAiConfig } from "@/lib/server-data";
-import { extractQuotationWithGemini, searchProductsWithGemini } from "@/lib/gemini";
+import { getAiConfig } from "@/lib/ai-settings";
+import { extractQuotationWithGemini, searchProductsWithGemini, GeminiError } from "@/lib/gemini";
 import { parseQuotationText } from "@/lib/calculations";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
 export async function POST(request: Request) {
+  const deadlineMs = Date.now() + 48_000;
   try {
     const contentType = request.headers.get("content-type") || "";
     const uploadedFiles: { name: string; mimeType: string; base64: string; size: number }[] = [];
@@ -73,7 +74,7 @@ export async function POST(request: Request) {
       );
     }
 
-    const aiCfg = await getAiConfig();
+    const aiCfg = await getAiConfig({ strict: true });
 
     // If AI is configured, use Gemini
     if (aiCfg.configured && aiCfg.apiKey) {
@@ -89,6 +90,7 @@ export async function POST(request: Request) {
           pastedText,
           context,
           searchProducts,
+          callOptions: { deadlineMs },
         });
 
       const warnings: string[] = [...extractWarnings];
@@ -100,11 +102,12 @@ export async function POST(request: Request) {
           .slice(0, 5)
           .map((it) => it.description.trim());
 
-        if (queries.length > 0) {
+        if (queries.length > 0 && deadlineMs - Date.now() >= 6_000) {
           const searchRes = await searchProductsWithGemini({
             apiKey: aiCfg.apiKey,
             model: modelUsed,
             items: queries,
+            callOptions: { deadlineMs, attemptTimeoutMs: 8_000 },
           });
           warnings.push(...searchRes.warnings);
 
@@ -122,6 +125,8 @@ export async function POST(request: Request) {
               match.purchaseSource = "pesquisa";
             }
           }
+        } else if (queries.length > 0) {
+          warnings.push("Leitura concluída. A pesquisa opcional foi adiada para respeitar o prazo; você pode pesquisar os itens no editor.");
         }
       }
 
@@ -153,15 +158,12 @@ export async function POST(request: Request) {
       { status: 400 }
     );
   } catch (error) {
-    console.error("POST /api/ai/extract error:", error);
-    return NextResponse.json(
-      {
-        error:
-          error instanceof Error
-            ? error.message
-            : "Erro ao processar a leitura das propostas.",
-      },
-      { status: 500 }
-    );
+    const code = error instanceof GeminiError ? error.code : "AI_EXTRACTION_FAILED";
+    console.error("AI extraction failed", { code });
+    return NextResponse.json({
+      error: error instanceof GeminiError ? error.message : "Não foi possível processar a leitura. Confira a conexão e o formato dos anexos e tente novamente.",
+      code,
+      attempts: error instanceof GeminiError ? error.attempts : undefined,
+    }, { status: error instanceof GeminiError ? error.status : 503 });
   }
 }
