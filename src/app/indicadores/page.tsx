@@ -1,20 +1,46 @@
 import type { Metadata } from "next";
-import { IndicatorsClient } from "@/components/IndicatorsClient";
-import { listPdfDownloads, listQuotations } from "@/lib/server-data";
+import { AppShell } from "@/components/AppShell";
+import { IndicatorsDashboard } from "@/components/IndicatorsDashboard";
+import { listPdfExports } from "@/lib/server/downloads";
+import { listCondominiums, listQuotations } from "@/lib/server/quotations";
+import type { PdfExportRecord } from "@/lib/server/downloads";
+import type { QuotationRecord } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
+export const metadata: Metadata = { title: "Indicadores para assembleia · Gerencial" };
 
-export const metadata: Metadata = {
-  title: "Indicadores para assembleia · Gerencial",
-};
+export default async function IndicatorsPage({ searchParams }: { searchParams: Promise<{ condominio?: string }> }) {
+  const { condominio } = await searchParams;
+  let records: QuotationRecord[] = [];
+  let condominiums: string[] = [];
+  let downloads: PdfExportRecord[] = [];
+  let dbError = false;
 
-export default async function IndicatorsPage() {
-  const [quotations, downloads] = await Promise.all([
-    listQuotations(),
-    listPdfDownloads(20),
-  ]);
+  // Os mapas e condomínios são a base dos indicadores. O histórico de PDFs é
+  // complementar: uma falha nele não pode apagar o dashboard inteiro.
+  try {
+    const [quotations, condos] = await Promise.all([listQuotations(), listCondominiums()]);
+    records = quotations;
+    condominiums = condos.map((item) => item.name);
+  } catch {
+    dbError = true;
+  }
+
+  try {
+    downloads = await listPdfExports(10);
+  } catch {
+    downloads = [];
+  }
 
   return (
-    <IndicatorsClient quotations={quotations} initialDownloads={downloads} />
+    <AppShell>
+      <IndicatorsDashboard
+        records={records}
+        condominiums={condominiums}
+        initialCondominium={condominio}
+        initialDownloads={downloads}
+        dbError={dbError}
+      />
+    </AppShell>
   );
 }

@@ -1,105 +1,40 @@
 import { NextResponse } from "next/server";
-import { eq } from "drizzle-orm";
-import { db } from "@/db";
-import { quotations } from "@/db/schema";
-import { ensureCondominiumExists, getQuotationById } from "@/lib/server-data";
-import type { QuotationData } from "@/lib/types";
+import { deleteQuotation, getQuotation, updateQuotation } from "@/lib/server/quotations";
 
-export async function GET(
-  _request: Request,
-  context: { params: Promise<{ id: string }> }
-) {
+export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
+
+type RouteContext = { params: Promise<{ id: string }> };
+
+export async function GET(_request: Request, context: RouteContext) {
+  const { id } = await context.params;
+  const quotation = await getQuotation(id);
+  if (!quotation) {
+    return NextResponse.json({ error: "Mapa de cotação não encontrado." }, { status: 404 });
+  }
+  return NextResponse.json({ quotation });
+}
+
+export async function PATCH(request: Request, context: RouteContext) {
+  const { id } = await context.params;
   try {
-    const { id } = await context.params;
-    const item = await getQuotationById(id);
-    if (!item) {
-      return NextResponse.json({ error: "Mapa não encontrado." }, { status: 404 });
+    const payload = await request.json();
+    const quotation = await updateQuotation(id, payload?.draft ?? payload);
+    if (!quotation) {
+      return NextResponse.json({ error: "Mapa de cotação não encontrado." }, { status: 404 });
     }
-    return NextResponse.json({ quotation: item });
+    return NextResponse.json({ quotation });
   } catch (error) {
-    console.error("GET /api/quotations/[id] error:", error);
-    return NextResponse.json({ error: "Erro ao buscar mapa." }, { status: 500 });
+    const message = error instanceof Error ? error.message : "Erro ao salvar mapa de cotação.";
+    return NextResponse.json({ error: message }, { status: 400 });
   }
 }
 
-export async function PUT(
-  request: Request,
-  context: { params: Promise<{ id: string }> }
-) {
-  try {
-    const { id } = await context.params;
-    const existing = await getQuotationById(id);
-    if (!existing) {
-      return NextResponse.json({ error: "Mapa não encontrado." }, { status: 404 });
-    }
-
-    const body = (await request.json()) as Partial<QuotationData>;
-    const nextCondo = (body.condominium ?? existing.condominium).trim();
-    if (nextCondo) {
-      await ensureCondominiumExists(nextCondo);
-    }
-
-    const [updated] = await db
-      .update(quotations)
-      .set({
-        status: body.status ?? existing.status,
-        condominium: nextCondo || existing.condominium,
-        analysisDate: body.analysisDate ?? existing.analysisDate,
-        recipient: body.recipient ?? existing.recipient,
-        service: body.service ?? existing.service,
-        description: body.description ?? existing.description,
-        kind: body.kind ?? existing.kind,
-        category: body.category ?? existing.category,
-        suppliers: body.suppliers ?? existing.suppliers,
-        items: body.items ?? existing.items,
-        analysis: body.analysis ?? existing.analysis,
-        attachments: body.attachments ?? existing.attachments,
-        updatedAt: new Date(),
-      })
-      .where(eq(quotations.id, id))
-      .returning();
-
-    return NextResponse.json({
-      quotation: {
-        ...updated,
-        createdAt: updated.createdAt.toISOString(),
-        updatedAt: updated.updatedAt.toISOString(),
-      },
-    });
-  } catch (error) {
-    console.error("PUT /api/quotations/[id] error:", error);
-    return NextResponse.json(
-      { error: "Erro ao salvar alterações do mapa." },
-      { status: 500 }
-    );
+export async function DELETE(_request: Request, context: RouteContext) {
+  const { id } = await context.params;
+  const deleted = await deleteQuotation(id);
+  if (!deleted) {
+    return NextResponse.json({ error: "Mapa de cotação não encontrado." }, { status: 404 });
   }
-}
-
-export async function PATCH(
-  request: Request,
-  context: { params: Promise<{ id: string }> }
-) {
-  return PUT(request, context);
-}
-
-export async function DELETE(
-  _request: Request,
-  context: { params: Promise<{ id: string }> }
-) {
-  try {
-    const { id } = await context.params;
-    const existing = await getQuotationById(id);
-    if (!existing) {
-      return NextResponse.json({ error: "Mapa não encontrado." }, { status: 404 });
-    }
-
-    await db.delete(quotations).where(eq(quotations.id, id));
-    return NextResponse.json({ ok: true });
-  } catch (error) {
-    console.error("DELETE /api/quotations/[id] error:", error);
-    return NextResponse.json(
-      { error: "Erro ao excluir mapa de cotação." },
-      { status: 500 }
-    );
-  }
+  return NextResponse.json({ ok: true });
 }

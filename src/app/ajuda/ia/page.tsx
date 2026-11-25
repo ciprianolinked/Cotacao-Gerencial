@@ -1,249 +1,312 @@
-import type { Metadata } from "next";
 import Link from "next/link";
+import type { Metadata } from "next";
+import { AppShell } from "@/components/AppShell";
 import {
-  AlertTriangle,
-  ArrowLeft,
-  ArrowRight,
-  ExternalLink,
-  Sparkles,
-} from "lucide-react";
+  ArrowLeftIcon,
+  ArrowRightIcon,
+  CheckIcon,
+  SparklesIcon,
+} from "@/components/icons";
+
+export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
-  title: "Como ativar a IA gratuita · Gerencial",
+  title: "Como ativar a IA gratuita · Ajuda Gerencial",
+  description:
+    "Passo a passo simples para conectar a IA gratuita do Google Gemini e ler propostas em PDF e fotos automaticamente.",
 };
 
 const STEPS = [
   {
     n: "1",
     title: "Tenha uma conta Google (Gmail)",
-    desc: "Você pode usar qualquer conta Google pessoal ou corporativa. Não é necessário informar cartão de crédito para usar a cota gratuita do Google AI Studio.",
+    body: "Você precisa apenas de uma conta Google — a mesma do Gmail ou do YouTube. Se ainda não tem, crie grátis em accounts.google.com. Não é preciso informar cartão de crédito em nenhum momento.",
+    tip: "Use de preferência o e-mail da empresa, para a chave ficar vinculada à Gerencial.",
   },
   {
     n: "2",
     title: "Abra o Google AI Studio",
-    desc: "Acesse aistudio.google.com/apikey em uma nova aba e faça login com sua conta Google. Se for o primeiro acesso, aceite os termos de uso do Google AI Studio.",
+    body: "No computador ou celular, acesse aistudio.google.com e entre com sua conta Google. Essa é a página oficial do Google para gerar chaves gratuitas da IA Gemini.",
+    tip: "Endereço direto da página de chaves: aistudio.google.com/apikey",
+    link: { href: "https://aistudio.google.com/apikey", label: "Abrir o Google AI Studio" },
   },
   {
     n: "3",
     title: "Clique em “Get API key” (Obter chave)",
-    desc: "No menu lateral ou no topo da página do Google AI Studio, localize o botão “Create API key” / “Criar chave de API”.",
+    body: "Dentro do AI Studio, procure no menu o botão “Get API key” ou “Create API key”. Na primeira vez, o Google pode pedir para aceitar os termos de uso — leia e aceite para continuar.",
+    tip: "Se o site estiver em inglês, procure exatamente o texto “Get API key” no menu lateral.",
   },
   {
     n: "4",
     title: "Crie a chave em um projeto",
-    desc: "Escolha a opção para criar a chave em um novo projeto (ou selecione um projeto existente) e aguarde alguns segundos até o Google gerar o código.",
+    body: "Clique em “Create API key” e escolha um projeto (pode ser o projeto padrão sugerido pelo Google). O Google mostrará sua chave. Os formatos podem variar: chaves novas também podem começar com “AQ.”.",
+    tip: "Guarde essa chave como uma senha: ela dá acesso à IA na sua conta.",
   },
   {
     n: "5",
     title: "Copie a chave inteira",
-    desc: "Clique no botão “Copy” ao lado da chave gerada (ela costuma começar com AIza...). Certifique-se de copiar sem espaços extras no início ou no final.",
+    body: "Clique no ícone de copiar ao lado da chave para copiar o código completo, sem faltar nenhuma letra. Qualquer pedacinho a menos e a chave não funciona.",
+    tip: "O formato e o tamanho variam. Copie a chave inteira diretamente do Google AI Studio; chaves novas podem começar com AQ.. Nunca a compartilhe.",
   },
   {
     n: "6",
     title: "Cole a chave aqui no aplicativo",
-    desc: "Volte para a página Configurar IA, cole a chave no campo indicado e clique em “Salvar e testar”. Assim que aparecer a confirmação verde, sua IA já está pronta para ler PDFs e fotos.",
+    body: "Volte para cá, abra a página “Configurar IA”, cole a chave no campo indicado e clique em “Salvar e testar”. Se aparecer a mensagem de sucesso, pronto: a leitura automática de PDFs e fotos já está funcionando!",
+    tip: "Feito isso uma única vez, você não precisa repetir — a chave fica salva.",
+    link: { href: "/configuracoes", label: "Ir para Configurar IA", internal: true },
   },
 ];
 
-export default function AjudaIaPage() {
+const ERRORS = [
+  {
+    symptom: "“O Google não conseguiu concluir a análise”",
+    cause: "O Google retornou um erro durante a análise. Isso pode acontecer por indisponibilidade temporária, mesmo com PDFs pequenos.",
+    fix: "O aplicativo tenta novamente e pode usar outra conexão ou modelo compatível, mantendo todos os arquivos na mesma análise. Se não conseguir concluir, os arquivos continuam selecionados. Confira o status do Gemini e a cota do projeto no Google AI Studio antes de tentar novamente.",
+  },
+  {
+    symptom: "“O Gemini não respondeu dentro do tempo disponível”",
+    cause: "A leitura de vários documentos depende do número de páginas, da complexidade e da disponibilidade do Google, não apenas do tamanho dos PDFs.",
+    fix: "Os arquivos continuam selecionados. Tente a análise novamente; se o erro persistir, confira o status e os limites do seu projeto no Google AI Studio. Na Vercel, publique a versão atual do aplicativo e confirme que o Fluid Compute está ativo.",
+  },
+  {
+    symptom: "“A chave do Gemini não é válida”",
+    cause: "A chave foi colada incompleta ou com espaço a mais no início/fim.",
+    fix: "Volte ao AI Studio, copie a chave inteira novamente e confirme se ela pertence ao projeto correto. Chaves novas podem começar com “AQ.”; o prefixo sozinho não confirma sua validade.",
+  },
+  {
+    symptom: "“O Google recusou a chave (erro 403)”",
+    cause: "A chave foi excluída/regenerada no Google, ou a API não está habilitada no projeto.",
+    fix: "No AI Studio, gere uma nova chave (“Create API key”) e salve aqui. Se persistir, ative a API “Generative Language” no projeto do Google Cloud.",
+  },
+  {
+    symptom: "“Limite gratuito atingido (429)”",
+    cause: "Você fez muitas análises em pouco tempo e bateu no teto momentâneo do plano grátis.",
+    fix: "Consulte os limites e a cota do seu projeto no Google AI Studio. Dependendo do limite atingido, talvez seja necessário aguardar a renovação por minuto ou por dia.",
+  },
+  {
+    symptom: "“O serviço do Google está instável”",
+    cause: "O serviço do Google pode estar temporariamente indisponível ou sobrecarregado.",
+    fix: "Atualize o aplicativo para a versão mais recente. Ela tenta novamente automaticamente e preserva os arquivos; se persistir, consulte a página de status do Gemini e os limites da sua conta.",
+  },
+  {
+    symptom: "Não acho o botão “Get API key”",
+    cause: "Você pode estar logado com outra conta ou em página diferente do AI Studio.",
+    fix: "Confirme que está em aistudio.google.com com a conta certa (foto no canto superior direito) e use o link direto aistudio.google.com/apikey.",
+  },
+];
+
+const FAQS = [
+  {
+    q: "Quanto custa? Vou pagar alguma coisa?",
+    a: "O Google oferece uma cota gratuita para modelos elegíveis, sujeita a limites que variam por modelo e projeto. O plano gratuito pode ser suficiente para testes, mas não há garantia para qualquer volume. Consulte preços e limites no Google antes de ativar faturamento ou usar um plano pago.",
+  },
+  {
+    q: "O que é essa “chave” (API key)?",
+    a: "É como uma senha que identifica o aplicativo junto ao Google. Guarde-a em segredo, não envie para o GitHub e limite o acesso de quem administra o projeto.",
+  },
+  {
+    q: "O que acontece com os documentos enviados?",
+    a: "Os arquivos são enviados ao provedor de IA configurado. Nos serviços gratuitos do Gemini, o Google informa que pode usar entradas e respostas para melhorar produtos e que revisores podem processá-las. Não envie dados sensíveis, pessoais ou confidenciais ao serviço gratuito; consulte os termos, a LGPD e as políticas da sua empresa antes de usar documentos reais.",
+  },
+  {
+    q: "E se eu não quiser usar IA?",
+    a: "Sem problema. O aplicativo funciona sem a chave: você pode colar o texto da cotação (o sistema tenta identificar fornecedores e valores) ou preencher o mapa manualmente. A IA só automatiza a leitura de arquivos.",
+  },
+  {
+    q: "Posso usar a mesma chave em outro computador?",
+    a: "Sim. Quando salva no painel, a chave fica armazenada no banco do aplicativo; quando definida na Vercel, fica em uma variável de ambiente. Esta versão não tem login próprio: proteja todo o endereço do aplicativo antes de armazenar dados ou chaves reais.",
+  },
+  {
+    q: "Existe outra IA além do Gemini?",
+    a: "O aplicativo aceita Google Gemini e também OpenAI por variável de ambiente. Confira os preços, limites e termos de privacidade do provedor e do modelo escolhidos; acesso gratuito e qualidade podem variar.",
+  },
+];
+
+export default function AiHelpPage() {
   return (
-    <main className="mx-auto max-w-[980px] px-4 pb-16 pt-6 sm:px-6">
-      <div className="flex flex-wrap items-center gap-3 text-[11.5px] font-semibold text-slate-500">
-        <Link href="/ajuda" className="inline-flex items-center gap-1.5 hover:text-ink">
-          <ArrowLeft className="h-3.5 w-3.5" />
-          Central de ajuda
-        </Link>
-        <span>·</span>
-        <Link href="/configuracoes" className="hover:text-ink">
-          Configurar IA
-        </Link>
-      </div>
-
-      <section className="mt-3 rounded-2xl bg-ink px-6 py-7 text-white sm:px-8">
-        <span className="inline-flex items-center gap-1.5 rounded-full bg-brand px-3 py-1 text-[9.5px] font-bold uppercase tracking-[0.14em] text-ink-deep">
-          <Sparkles className="h-3 w-3" />
-          Guia passo a passo · ~2 minutos
-        </span>
-        <h1 className="font-display mt-3 max-w-2xl text-[28px] leading-tight sm:text-[36px]">
-          Como ativar a IA gratuita que lê suas cotações
-        </h1>
-        <p className="mt-2 max-w-2xl text-[13px] leading-relaxed text-white/75">
-          Siga estas 6 etapas simples para conectar o Google Gemini gratuitamente
-          e extrair fornecedores, itens, valores e condições diretamente dos
-          PDFs e fotos dos orçamentos.
-        </p>
-        <div className="mt-4 flex flex-wrap gap-2">
-          <a
-            href="https://aistudio.google.com/apikey"
-            target="_blank"
-            rel="noreferrer"
-            className="btn btn-brand"
-          >
-            Abrir Google AI Studio
-            <ExternalLink className="h-3.5 w-3.5" />
-          </a>
+    <AppShell>
+      <main className="mx-auto max-w-[980px] px-4 pb-16 pt-5 sm:px-6">
           <Link
-            href="/configuracoes"
-            className="btn border-white/20 bg-white/10 text-white hover:bg-white/20"
+            href="/ajuda"
+            className="inline-flex items-center gap-1.5 text-[11.5px] font-semibold text-slate-500 hover:text-ink"
           >
-            Ir para Configurar IA
-            <ArrowRight className="h-3.5 w-3.5" />
+            <ArrowLeftIcon className="h-3.5 w-3.5" />
+            Central de ajuda
           </Link>
+
+        <section className="relative mt-2 overflow-hidden rounded-2xl bg-ink px-5 py-7 text-white sm:px-8">
+          <div
+            className="pointer-events-none absolute inset-0 opacity-25"
+            style={{
+              backgroundImage:
+                "radial-gradient(circle at 85% 15%, rgba(250,177,42,0.6) 0, transparent 45%)",
+            }}
+          />
+          <div className="relative">
+            <p className="inline-flex items-center gap-2 rounded-full bg-brand px-3 py-1 text-[9.5px] font-bold uppercase tracking-[0.16em] text-ink-deep">
+              <SparklesIcon className="h-3 w-3" />
+              Guia para iniciantes · 2 minutos
+            </p>
+            <h1 className="font-display mt-3 max-w-xl text-[28px] leading-[1.1] sm:text-[36px]">
+              Como ativar a IA gratuita que lê suas cotações
+            </h1>
+            <p className="mt-2 max-w-xl text-[13px] leading-relaxed text-white/70">
+              Este guia explica, clique por clique e sem termos técnicos, como gerar sua chave gratuita do Google
+              Gemini e conectar ao aplicativo. Você só faz isso uma vez.
+            </p>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <Link href="/configuracoes" className="btn btn-brand">
+                Configurar minha IA agora
+                <ArrowRightIcon className="h-3.5 w-3.5" />
+              </Link>
+              <a
+                href="https://aistudio.google.com/apikey"
+                target="_blank"
+                rel="noreferrer"
+                className="btn border-white/20 bg-white/10 text-white hover:bg-white/20"
+              >
+                Abrir Google AI Studio
+              </a>
+            </div>
+          </div>
+        </section>
+
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-line bg-white px-4 py-3.5">
+          <div>
+            <p className="text-[12px] font-bold text-ink">Quer publicar o aplicativo na internet?</p>
+            <p className="mt-0.5 text-[11px] leading-relaxed text-slate-500">Veja também como conectar GitHub, Neon e Vercel e proteger o acesso.</p>
+          </div>
+          <Link href="/ajuda/publicar" className="btn btn-ghost">Guia de publicação <ArrowRightIcon className="h-3.5 w-3.5" /></Link>
         </div>
-      </section>
 
-      <section className="mt-6 rounded-2xl border border-line bg-white px-5 py-5">
-        <h2 className="text-[15px] font-extrabold text-ink">
-          Modelos usados e alternância automática
-        </h2>
-        <p className="mt-1 text-[11.5px] leading-relaxed text-slate-600">
-          Na leitura de PDFs e fotos, o sistema usa sua chave para chamar os
-          modelos nesta ordem. Se um modelo estiver ocupado (503), lento ou sem
-          cota no momento, ele avança para o próximo automaticamente — sem
-          perder seus arquivos nem exigir reenvio manual:
-        </p>
-        <ol className="mt-3 grid gap-2 sm:grid-cols-2">
+        <section className="mt-4 grid gap-3 rounded-2xl border border-line bg-white p-4 sm:grid-cols-3 sm:p-5">
           {[
-            {
-              model: "gemini-4-hydrogen",
-              note: "Equilíbrio entre velocidade e inteligência · cota gratuita · padrão",
-            },
-            {
-              model: "gemini-3.5-flash-lite",
-              note: "O mais rápido e econômico · ideal para leitura de documentos",
-            },
-            {
-              model: "gemini-3.8-flash",
-              note: "Fallback de uso geral, alto throughput",
-            },
-            {
-              model: "gemini-3.1-flash-lite",
-              note: "Fallback econômico da geração anterior",
-            },
-            {
-              model: "gemini-2.5-flash-lite",
-              note: "Fallback legado de última instância",
-            },
+            { t: "Cota gratuita", d: "Sujeita aos limites e condições atuais do Google." },
+            { t: "Configuração única", d: "A chave pode ser ajustada quando necessário." },
+            { t: "Lê PDF e foto", d: "Orçamentos em PDF, JPG, PNG ou print de celular." },
           ].map((item) => (
-            <li
-              key={item.model}
-              className="rounded-lg bg-paper px-3 py-2.5"
-            >
-              <code className="text-[11px] font-bold text-ink">
-                {item.model}
-              </code>
-              <p className="mt-0.5 text-[10.5px] leading-snug text-slate-500">
-                {item.note}
-              </p>
-            </li>
-          ))}
-        </ol>
-      </section>
-
-      <section className="mt-6">
-        <h2 className="text-[18px] font-extrabold text-ink">Passo a passo</h2>
-        <div className="mt-3 grid gap-3 sm:grid-cols-2">
-          {STEPS.map((step) => (
-            <div key={step.n} className="card px-4 py-4">
-              <div className="flex items-start gap-3">
-                <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-ink text-[12px] font-extrabold text-brand">
-                  {step.n}
-                </span>
-                <div>
-                  <h3 className="text-[13.5px] font-extrabold text-ink">
-                    {step.title}
-                  </h3>
-                  <p className="mt-1 text-[12px] leading-relaxed text-slate-600">
-                    {step.desc}
-                  </p>
-                </div>
+            <div key={item.t} className="flex items-start gap-2.5 rounded-xl bg-paper px-3 py-2.5">
+              <span className="mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-full bg-success-soft text-success">
+                <CheckIcon className="h-3 w-3" />
+              </span>
+              <div>
+                <p className="text-[12.5px] font-extrabold text-ink">{item.t}</p>
+                <p className="text-[11px] leading-snug text-slate-500">{item.d}</p>
               </div>
             </div>
           ))}
-        </div>
-      </section>
+        </section>
 
-      <section className="card mt-6 px-5 py-5">
-        <h2 className="flex items-center gap-2 text-[16px] font-extrabold text-ink">
-          <AlertTriangle className="h-4 w-4 text-amber-600" />
-          Deu erro? Veja a solução
-        </h2>
-        <div className="mt-3 space-y-2.5">
-          {[
-            {
-              title: "“Chave inválida ou sem permissão”",
-              fix: "Confira se você copiou a chave inteira no Google AI Studio sem espaços ou quebras de linha, e se ela não foi revogada.",
-            },
-            {
-              title: "Erro 503 — “serviço indisponível / sobrecarregado”",
-              fix: "Isso é instabilidade temporária do Google, não problema do seu arquivo. O sistema já alterna automaticamente entre gemini-4-hydrogen e gemini-3.5-flash-lite (e demais modelos gratuitos) antes de falhar. Se ainda assim não concluir, aguarde alguns segundos e clique novamente — seus arquivos continuam selecionados.",
-            },
-            {
-              title: "“Limite da cota gratuita atingido” (HTTP 429)",
-              fix: "A cota gratuita do Gemini possui limite de requisições por minuto. Aguarde cerca de 1 minuto e clique novamente em Analisar propostas.",
-            },
-            {
-              title: "Arquivo muito grande ou ilegível",
-              fix: "Envie PDFs com texto nítido ou fotos bem iluminadas (até 6 arquivos por envio). Se preferir, use a opção “Ou cole o texto da cotação”, que funciona mesmo sem IA.",
-            },
-          ].map((item) => (
-            <div
-              key={item.title}
-              className="rounded-xl border border-line bg-paper/60 px-4 py-3"
-            >
-              <p className="text-[12.5px] font-extrabold text-ink">
-                {item.title}
-              </p>
-              <p className="mt-0.5 text-[11.5px] leading-relaxed text-slate-600">
-                {item.fix}
-              </p>
-            </div>
-          ))}
-        </div>
-      </section>
+        <section className="mt-6">
+          <h2 className="font-display text-[22px] text-ink">Passo a passo</h2>
+          <p className="mt-1 max-w-2xl text-[12.5px] text-slate-500">
+            Siga na ordem. Se preferir, abra o Google AI Studio em outra aba e vá alternando entre as telas.
+          </p>
+          <ol className="mt-3 space-y-3">
+            {STEPS.map((step) => (
+              <li key={step.n} className="card flex gap-3.5 px-4 py-4 sm:px-5">
+                <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-ink text-[15px] font-extrabold text-brand">
+                  {step.n}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <h3 className="text-[14.5px] font-extrabold leading-tight text-ink">{step.title}</h3>
+                  <p className="mt-1 text-[12.5px] leading-relaxed text-slate-600">{step.body}</p>
+                  {step.tip && (
+                    <p className="mt-2 rounded-lg bg-brand-soft px-2.5 py-1.5 text-[11.5px] leading-snug text-brand-dark">
+                      <span className="font-extrabold">Dica: </span>
+                      {step.tip}
+                    </p>
+                  )}
+                  {step.link &&
+                    (step.link.internal ? (
+                      <Link href={step.link.href} className="btn btn-brand mt-2.5">
+                        {step.link.label}
+                        <ArrowRightIcon className="h-3.5 w-3.5" />
+                      </Link>
+                    ) : (
+                      <a href={step.link.href} target="_blank" rel="noreferrer" className="btn btn-primary mt-2.5">
+                        {step.link.label}
+                        <ArrowRightIcon className="h-3.5 w-3.5" />
+                      </a>
+                    ))}
+                </div>
+              </li>
+            ))}
+          </ol>
+        </section>
 
-      <section className="card mt-4 px-5 py-5">
-        <h2 className="text-[16px] font-extrabold text-ink">
-          Perguntas frequentes
-        </h2>
-        <dl className="mt-3 space-y-2.5 text-[12px]">
-          <div className="rounded-lg bg-paper px-3.5 py-2.5">
-            <dt className="font-extrabold text-ink">
-              Vou receber cobrança automática no futuro?
-            </dt>
-            <dd className="mt-0.5 text-slate-600">
-              Não. Enquanto você não vincular um cartão de crédito nem ativar
-              faturamento no Google Cloud, a chave opera apenas dentro dos
-              limites da cota gratuita.
-            </dd>
+        <section className="mt-8">
+          <h2 className="font-display text-[22px] text-ink">Deu erro? Veja a solução</h2>
+          <p className="mt-1 max-w-2xl text-[12.5px] text-slate-500">
+            As mensagens de erro mais comuns e o que fazer em cada uma — sem precisar chamar técnico.
+          </p>
+          <div className="mt-3 space-y-2.5">
+            {ERRORS.map((entry) => (
+              <details key={entry.symptom} className="card group px-4 py-3 sm:px-5">
+                <summary className="cursor-pointer list-none text-[13px] font-extrabold text-ink [&::-webkit-details-marker]:hidden">
+                  <span className="mr-2 inline-grid h-5 w-5 place-items-center rounded-full bg-red-50 align-middle text-[11px] font-black text-red-500">
+                    !
+                  </span>
+                  {entry.symptom}
+                  <span className="ml-2 text-[10.5px] font-bold text-brand-dark group-open:hidden">
+                    Ver solução →
+                  </span>
+                </summary>
+                <div className="mt-2 space-y-1.5 border-t border-line pt-2 text-[12px] leading-relaxed">
+                  <p className="text-slate-600">
+                    <span className="font-bold text-ink">Por que acontece: </span>
+                    {entry.cause}
+                  </p>
+                  <p className="rounded-lg bg-success-soft px-2.5 py-1.5 text-success">
+                    <span className="font-bold">Como resolver: </span>
+                    {entry.fix}
+                  </p>
+                </div>
+              </details>
+            ))}
           </div>
-          <div className="rounded-lg bg-paper px-3.5 py-2.5">
-            <dt className="font-extrabold text-ink">
-              Posso continuar usando o sistema sem configurar IA?
-            </dt>
-            <dd className="mt-0.5 text-slate-600">
-              Sim! Todo o editor de mapas, o comparativo automático, o parecer
-              técnico, o leitor de texto colado, a geração de PDF e o dashboard
-              de indicadores funcionam 100% sem IA.
-            </dd>
-          </div>
-        </dl>
-      </section>
+        </section>
 
-      <section className="mt-6 flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-brand/40 bg-brand-soft px-6 py-5">
-        <div>
-          <h2 className="font-display text-[20px] text-ink">
+        <section className="mt-8">
+          <h2 className="font-display text-[22px] text-ink">Perguntas frequentes</h2>
+          <div className="mt-3 space-y-2.5">
+            {FAQS.map((entry) => (
+              <details key={entry.q} className="card group px-4 py-3 sm:px-5">
+                <summary className="cursor-pointer list-none text-[13px] font-extrabold text-ink [&::-webkit-details-marker]:hidden">
+                  {entry.q}
+                  <span className="ml-2 text-[10.5px] font-bold text-brand-dark group-open:hidden">Ler →</span>
+                </summary>
+                <p className="mt-2 border-t border-line pt-2 text-[12px] leading-relaxed text-slate-600">{entry.a}</p>
+              </details>
+            ))}
+          </div>
+        </section>
+
+        <section className="mt-8 overflow-hidden rounded-2xl bg-ink px-5 py-6 text-center text-white sm:px-8">
+          <SparklesIcon className="mx-auto h-6 w-6 text-brand" />
+          <h2 className="font-display mx-auto mt-2 max-w-md text-[22px] leading-tight">
             Pronto para ativar sua IA gratuita?
           </h2>
-          <p className="mt-0.5 text-[12px] text-slate-600">
-            Cole sua chave do Google Gemini e comece a montar mapas em segundos.
+          <p className="mx-auto mt-1 max-w-md text-[12px] text-white/65">
+            Gere a chave no Google AI Studio, cole na página de configuração e crie seu primeiro mapa com leitura
+            automática.
           </p>
-        </div>
-        <Link href="/configuracoes" className="btn btn-primary">
-          Ir para Configurar IA
-          <ArrowRight className="h-4 w-4" />
-        </Link>
-      </section>
-    </main>
+          <div className="mt-4 flex flex-wrap justify-center gap-2">
+            <a
+              href="https://aistudio.google.com/apikey"
+              target="_blank"
+              rel="noreferrer"
+              className="btn border-white/20 bg-white/10 text-white hover:bg-white/20"
+            >
+              1 · Gerar chave grátis
+            </a>
+            <Link href="/configuracoes" className="btn btn-brand">
+              2 · Colar e ativar
+              <ArrowRightIcon className="h-3.5 w-3.5" />
+            </Link>
+          </div>
+        </section>
+      </main>
+    </AppShell>
   );
 }

@@ -1,43 +1,54 @@
+import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { QuotationEditorClient } from "@/components/QuotationEditorClient";
-import { getQuotationById, listCondominiums } from "@/lib/server-data";
+import { AppShell } from "@/components/AppShell";
+import { QuotationEditor } from "@/components/QuotationEditor";
+import { getQuotation, listCondominiums } from "@/lib/server/quotations";
+import type { QuotationDraft } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
-export default async function QuotationDetailPage({
-  params,
-}: {
-  params: Promise<{ id: string }>;
-}) {
-  const { id } = await params;
-  const [quotation, condos] = await Promise.all([
-    getQuotationById(id),
-    listCondominiums(),
-  ]);
+export const metadata: Metadata = {
+  title: "Mapa de cotação · Gerencial",
+};
 
-  if (!quotation) {
-    notFound();
+export default async function QuotationPage({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+  const record = await getQuotation(id).catch(() => null);
+  if (!record) notFound();
+
+  let condominiums: string[] = [];
+  try {
+    condominiums = (await listCondominiums()).map((condominium) => condominium.name);
+  } catch {
+    condominiums = [];
+  }
+  if (record.condominium && !condominiums.includes(record.condominium)) {
+    condominiums = [...condominiums, record.condominium];
   }
 
+  const draft: QuotationDraft = {
+    status: record.status,
+    condominium: record.condominium,
+    analysisDate: record.analysisDate,
+    recipient: record.recipient,
+    service: record.service,
+    description: record.description,
+    kind: record.kind,
+    category: record.category,
+    suppliers: record.suppliers,
+    items: record.items,
+    analysis: record.analysis,
+    attachments: record.attachments,
+  };
+
   return (
-    <QuotationEditorClient
-      quotationId={quotation.id}
-      protocol={quotation.protocol}
-      initial={{
-        status: quotation.status,
-        condominium: quotation.condominium,
-        analysisDate: quotation.analysisDate,
-        recipient: quotation.recipient,
-        service: quotation.service,
-        description: quotation.description,
-        kind: quotation.kind,
-        category: quotation.category,
-        suppliers: quotation.suppliers,
-        items: quotation.items,
-        analysis: quotation.analysis,
-        attachments: quotation.attachments,
-      }}
-      condominiums={condos.map((c) => c.name)}
-    />
+    <AppShell>
+      <QuotationEditor
+        initial={draft}
+        quotationId={record.id}
+        protocol={record.protocol}
+        condominiums={condominiums}
+      />
+    </AppShell>
   );
 }
