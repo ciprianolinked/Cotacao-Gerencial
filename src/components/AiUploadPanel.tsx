@@ -13,6 +13,7 @@ import {
   Upload,
 } from "lucide-react";
 import { formatSize } from "@/lib/calculations";
+import { safeJson } from "@/lib/http";
 import type { QuotationData } from "@/lib/types";
 
 interface AiUploadPanelProps {
@@ -55,7 +56,7 @@ export function AiUploadPanel({
 
   useEffect(() => {
     fetch("/api/ai/status")
-      .then((r) => r.json())
+      .then((r) => safeJson<{ configured?: boolean; model?: string }>(r))
       .then((d) =>
         setAiStatus({
           checked: true,
@@ -107,8 +108,13 @@ export function AiUploadPanel({
         method: "POST",
         body: fd,
       });
-      const json = await res.json();
-      if (!res.ok) {
+      const json = await safeJson<{
+        error?: string;
+        mode?: string;
+        draft?: QuotationData;
+        warnings?: string[];
+      }>(res);
+      if (!res.ok || !json.draft) {
         throw new Error(json.error || "Falha ao analisar propostas.");
       }
 
@@ -305,10 +311,10 @@ export function AiUploadPanel({
             </div>
             <p className="mt-1.5 pl-6 text-[10.5px] leading-snug text-red-600">
               O sistema já tentou automaticamente os modelos{" "}
-              <strong>gemini-4-hydrogen</strong> e{" "}
-              <strong>gemini-3.5-flash-lite</strong> antes de falhar. Seus
-              arquivos continuam selecionados — você pode tentar novamente
-              sem perdê-los.
+              <strong>gemini-3.5-flash-lite</strong> e{" "}
+              <strong>gemini-4-hydrogen</strong> (e demais fallbacks) antes de
+              falhar. Seus arquivos continuam selecionados — você pode tentar
+              novamente sem perdê-los.
             </p>
             <div className="mt-2.5 flex flex-wrap items-center gap-2 pl-6">
               <a

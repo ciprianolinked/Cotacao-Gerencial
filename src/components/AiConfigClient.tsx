@@ -12,6 +12,8 @@ import {
   Sparkles,
   Trash2,
 } from "lucide-react";
+import { SELECTABLE_MODELS } from "@/lib/gemini";
+import { safeJson } from "@/lib/http";
 
 interface AiConfigClientProps {
   initialStatus: {
@@ -24,6 +26,9 @@ interface AiConfigClientProps {
 
 export function AiConfigClient({ initialStatus }: AiConfigClientProps) {
   const [status, setStatus] = useState(initialStatus);
+  const [selectedModel, setSelectedModel] = useState(
+    initialStatus.model || "gemini-3.5-flash-lite"
+  );
   const [apiKey, setApiKey] = useState("");
   const [showKey, setShowKey] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -35,7 +40,7 @@ export function AiConfigClient({ initialStatus }: AiConfigClientProps) {
   } | null>(null);
 
   async function handleSaveAndTest() {
-    if (!apiKey.trim()) {
+    if (!apiKey.trim() && !status.configured) {
       setFeedback({
         type: "error",
         text: "Cole sua chave de API do Google Gemini no campo acima.",
@@ -48,16 +53,26 @@ export function AiConfigClient({ initialStatus }: AiConfigClientProps) {
       const res = await fetch("/api/ai/config", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ apiKey: apiKey.trim() }),
+        body: JSON.stringify({
+          apiKey: apiKey.trim(),
+          model: selectedModel,
+        }),
       });
-      const json = await res.json();
+      const json = await safeJson<{
+        error?: string;
+        source?: "env" | "db" | "none";
+        maskedKey?: string | null;
+        model?: string;
+        message?: string;
+      }>(res);
       if (!res.ok) throw new Error(json.error || "Chave rejeitada.");
       setStatus({
         configured: true,
-        source: "db",
-        maskedKey: json.maskedKey,
-        model: json.model,
+        source: json.source ?? "db",
+        maskedKey: json.maskedKey ?? status.maskedKey,
+        model: json.model ?? selectedModel,
       });
+      if (json.model) setSelectedModel(json.model);
       setApiKey("");
       setFeedback({
         type: "success",
@@ -81,8 +96,16 @@ export function AiConfigClient({ initialStatus }: AiConfigClientProps) {
     setFeedback(null);
     try {
       const res = await fetch("/api/ai/config", { method: "PUT" });
-      const json = await res.json();
+      const json = await safeJson<{
+        error?: string;
+        model?: string;
+        message?: string;
+      }>(res);
       if (!res.ok) throw new Error(json.error || "Falha no teste de conexão.");
+      if (json.model) {
+        setStatus((prev) => ({ ...prev, model: json.model! }));
+        setSelectedModel(json.model);
+      }
       setFeedback({
         type: "success",
         text: json.message || "Conexão com o Google Gemini funcionando.",
@@ -106,13 +129,19 @@ export function AiConfigClient({ initialStatus }: AiConfigClientProps) {
     setFeedback(null);
     try {
       const res = await fetch("/api/ai/config", { method: "DELETE" });
-      const json = await res.json();
+      const json = await safeJson<{
+        error?: string;
+        configured?: boolean;
+        source?: "env" | "db" | "none";
+        maskedKey?: string | null;
+        model?: string;
+      }>(res);
       if (!res.ok) throw new Error(json.error || "Erro ao remover chave.");
       setStatus({
         configured: Boolean(json.configured),
-        source: json.source,
-        maskedKey: json.maskedKey,
-        model: json.model,
+        source: json.source ?? "none",
+        maskedKey: json.maskedKey ?? null,
+        model: json.model ?? selectedModel,
       });
       setFeedback({
         type: "success",
@@ -203,45 +232,72 @@ export function AiConfigClient({ initialStatus }: AiConfigClientProps) {
               </div>
             </div>
 
-            <div className="px-4 py-4 sm:px-5">
-              <label htmlFor="gemini-key">
-                <span className="label">Chave de API do Google Gemini</span>
-              </label>
-              <div className="mt-1.5 flex flex-col gap-2 sm:flex-row">
-                <div className="relative flex-1">
-                  <input
-                    id="gemini-key"
-                    type={showKey ? "text" : "password"}
-                    autoComplete="off"
-                    spellCheck={false}
-                    value={apiKey}
-                    onChange={(e) => setApiKey(e.target.value)}
-                    placeholder="Cole aqui a chave gerada no Google AI Studio"
-                    className="field pr-20 font-mono !text-[12px]"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowKey((v) => !v)}
-                    className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-md px-2 py-1 text-[10.5px] font-bold text-slate-500 hover:bg-paper hover:text-ink"
-                  >
-                    {showKey ? "Ocultar" : "Mostrar"}
-                  </button>
+            <div className="space-y-3 px-4 py-4 sm:px-5">
+              <div>
+                <label htmlFor="gemini-key">
+                  <span className="label">Chave de API do Google Gemini</span>
+                </label>
+                <div className="mt-1.5 flex flex-col gap-2 sm:flex-row">
+                  <div className="relative flex-1">
+                    <input
+                      id="gemini-key"
+                      type={showKey ? "text" : "password"}
+                      autoComplete="off"
+                      spellCheck={false}
+                      value={apiKey}
+                      onChange={(e) => setApiKey(e.target.value)}
+                      placeholder={
+                        status.configured
+                          ? "Deixe em branco para manter a chave atual ou cole uma nova"
+                          : "Cole aqui a chave gerada no Google AI Studio"
+                      }
+                      className="field pr-20 font-mono !text-[12px]"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowKey((v) => !v)}
+                      className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-md px-2 py-1 text-[10.5px] font-bold text-slate-500 hover:bg-paper hover:text-ink"
+                    >
+                      {showKey ? "Ocultar" : "Mostrar"}
+                    </button>
+                  </div>
                 </div>
+                <p className="mt-1.5 text-[11px] leading-snug text-slate-500">
+                  Não tem a chave?{" "}
+                  <Link
+                    href="/ajuda/ia"
+                    className="font-bold text-brand-dark hover:underline"
+                  >
+                    Veja o passo a passo de 2 minutos →
+                  </Link>
+                </p>
               </div>
 
-              <p className="mt-1.5 text-[11px] leading-snug text-slate-500">
-                Não tem a chave?{" "}
-                <Link
-                  href="/ajuda/ia"
-                  className="font-bold text-brand-dark hover:underline"
+              <div>
+                <label htmlFor="gemini-model">
+                  <span className="label">Modelo principal</span>
+                </label>
+                <select
+                  id="gemini-model"
+                  value={selectedModel}
+                  onChange={(e) => setSelectedModel(e.target.value)}
+                  className="field mt-1 text-[12px] font-semibold"
                 >
-                  Veja o passo a passo de 2 minutos →
-                </Link>
-              </p>
+                  {SELECTABLE_MODELS.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.label}
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-1 text-[10.5px] text-slate-500">
+                  Se o modelo escolhido retornar 503 ou lentidão, o aplicativo
+                  alterna automaticamente para os demais modelos gratuitos.
+                </p>
+              </div>
 
               {feedback && (
                 <div
-                  className={`mt-3 flex items-start gap-2 rounded-lg px-3 py-2 text-[11.5px] font-semibold ${
+                  className={`flex items-start gap-2 rounded-lg px-3 py-2 text-[11.5px] font-semibold ${
                     feedback.type === "error"
                       ? "bg-red-50 text-red-700"
                       : "bg-success-soft text-success"
@@ -252,7 +308,7 @@ export function AiConfigClient({ initialStatus }: AiConfigClientProps) {
                 </div>
               )}
 
-              <div className="mt-3 flex flex-wrap gap-2">
+              <div className="flex flex-wrap gap-2">
                 <button
                   type="button"
                   disabled={saving}
@@ -294,7 +350,7 @@ export function AiConfigClient({ initialStatus }: AiConfigClientProps) {
 
               <Link
                 href="/mapas/novo"
-                className="btn btn-primary mt-3 w-full sm:w-auto"
+                className="btn btn-primary w-full sm:w-auto"
               >
                 Criar meu primeiro mapa com IA
                 <ArrowRight className="h-3.5 w-3.5" />
@@ -391,11 +447,10 @@ export function AiConfigClient({ initialStatus }: AiConfigClientProps) {
             </p>
             <p className="mt-1 text-[11px] leading-snug text-slate-600">
               Se o modelo principal estiver ocupado (erro 503) ou lento, o
-              sistema tenta automaticamente, nesta ordem:{" "}
+              sistema alterna automaticamente entre{" "}
+              <strong>gemini-3.5-flash-lite</strong> (mais rápido e econômico) e{" "}
               <strong>gemini-4-hydrogen</strong> (equilíbrio entre velocidade e
-              inteligência) e <strong>gemini-3.5-flash-lite</strong> (mais
-              rápido e econômico), seguidos dos demais modelos gratuitos
-              atuais. Nada trava nem pede reenvio manual.
+              inteligência), além dos demais modelos gratuitos atuais.
             </p>
           </section>
 

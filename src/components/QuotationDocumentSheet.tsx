@@ -10,6 +10,7 @@ import {
   supplierCostBreakdown,
 } from "@/lib/calculations";
 import { COST_TYPE_LABEL, type CostType, type QuotationData } from "@/lib/types";
+import { BrandLogo } from "./BrandLogo";
 
 interface QuotationDocumentSheetProps {
   data: QuotationData;
@@ -43,12 +44,7 @@ export function QuotationDocumentSheet({
       <div className="doc-band">
         <div className="flex items-start justify-between gap-6">
           <div>
-            <img
-              src="/identidade/logo.png"
-              alt="Gerencial — Governança Condominial"
-              style={{ height: 28 }}
-              className="w-auto max-w-full"
-            />
+            <BrandLogo height={28} />
             <p className="mt-2 max-w-[260px] text-[9px] leading-snug text-white/60">
               Administração, governança e apoio à decisão em condomínios e
               associações.

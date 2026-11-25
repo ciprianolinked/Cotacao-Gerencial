@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
+import { BrandLogo } from "@/components/BrandLogo";
 
 export default function NotFound() {
   return (
@@ -11,13 +12,7 @@ export default function NotFound() {
             role="img"
             aria-label="Gerencial — Governança Condominial"
           >
-            <img
-              src="/identidade/logo.png"
-              alt=""
-              style={{ height: 38 }}
-              className="w-auto max-w-full"
-              aria-hidden="true"
-            />
+            <BrandLogo height={38} decorative />
           </span>
         </div>
         <p className="mt-6 text-[10px] font-bold uppercase tracking-[0.2em] text-brand-dark">

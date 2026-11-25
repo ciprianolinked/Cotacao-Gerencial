@@ -112,11 +112,19 @@ function truncateText(
 
 async function embedLogo(pdfDoc: PDFDocument) {
   try {
-    const logoPath = path.join(process.cwd(), "public", "identidade", "logo.png");
-    const bytes = await readFile(logoPath);
+    const bytes = await readFile(
+      path.join(/*turbopackIgnore: true*/ process.cwd(), "public", "identidade", "logo.png")
+    );
     return await pdfDoc.embedPng(bytes);
   } catch {
-    return null;
+    try {
+      const bytes = await readFile(
+        path.join(/*turbopackIgnore: true*/ process.cwd(), "src", "assets", "logo.png")
+      );
+      return await pdfDoc.embedPng(bytes);
+    } catch {
+      return null;
+    }
   }
 }
 

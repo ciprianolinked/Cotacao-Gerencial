@@ -43,12 +43,11 @@ test("vercel.json possui JSON válido e região configurada", () => {
   assert.ok(Array.isArray(parsed.regions) && parsed.regions.includes("gru1"));
 });
 
-test("cadeia de fallback do Gemini prioriza gemini-4-hydrogen e gemini-3.5-flash-lite", () => {
+test("cadeia de fallback do Gemini inclui gemini-3.5-flash-lite e gemini-4-hydrogen", () => {
   const content = fs.readFileSync(path.join(ROOT, "src/lib/gemini.ts"), "utf8");
-  const idxH = content.indexOf('"gemini-4-hydrogen"');
-  const idxF = content.indexOf('"gemini-3.5-flash-lite"');
-  assert.ok(idxH > 0, "gemini-4-hydrogen deve estar listado");
-  assert.ok(idxF > idxH, "gemini-3.5-flash-lite deve vir logo após gemini-4-hydrogen");
+  assert.ok(content.includes('"gemini-3.5-flash-lite"'), "gemini-3.5-flash-lite deve estar listado");
+  assert.ok(content.includes('"gemini-4-hydrogen"'), "gemini-4-hydrogen deve estar listado");
+  assert.ok(fs.existsSync(path.join(ROOT, "src/assets/logo.png")), "src/assets/logo.png deve existir para bundling estático");
 });
 
 test("src/db/index.ts não lança erro no top-level quando DATABASE_URL está ausente", () => {

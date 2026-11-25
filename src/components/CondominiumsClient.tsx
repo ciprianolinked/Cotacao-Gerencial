@@ -16,6 +16,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { normalizeText } from "@/lib/calculations";
+import { safeJson } from "@/lib/http";
 import type { CondominiumRecord } from "@/lib/types";
 
 function formatCnpjDisplay(digits: string | null | undefined): string {
@@ -125,7 +126,7 @@ export function CondominiumsClient({ initial }: CondominiumsClientProps) {
     setCnpjInfo(null);
     try {
       const res = await fetch(`/api/cnpj/${digits}`);
-      const json = await res.json();
+      const json = await safeJson<{ error?: string; company?: Record<string, string> }>(res);
       if (!res.ok) {
         throw new Error(json.error || "CNPJ não encontrado.");
       }
@@ -191,10 +192,15 @@ export function CondominiumsClient({ initial }: CondominiumsClientProps) {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
         });
-        const json = await res.json();
-        if (!res.ok) throw new Error(json.error || "Erro ao cadastrar.");
+        const json = await safeJson<{
+          error?: string;
+          condominium?: CondominiumRecord;
+        }>(res);
+        if (!res.ok || !json.condominium) {
+          throw new Error(json.error || "Erro ao cadastrar.");
+        }
         setList((prev) =>
-          [...prev, json.condominium].sort((a, b) =>
+          [...prev, json.condominium!].sort((a, b) =>
             a.name.localeCompare(b.name)
           )
         );
@@ -209,20 +215,26 @@ export function CondominiumsClient({ initial }: CondominiumsClientProps) {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
         });
-        const json = await res.json();
-        if (!res.ok) throw new Error(json.error || "Erro ao atualizar.");
+        const json = await safeJson<{
+          error?: string;
+          condominium?: CondominiumRecord;
+        }>(res);
+        if (!res.ok || !json.condominium) {
+          throw new Error(json.error || "Erro ao atualizar.");
+        }
+        const updated = json.condominium;
         setList((prev) =>
           prev
             .map((c) =>
               c.id === selectedId
                 ? {
                     ...c,
-                    name: json.condominium.name,
-                    cnpj: json.condominium.cnpj,
-                    city: json.condominium.city,
-                    manager: json.condominium.manager,
-                    contactEmail: json.condominium.contactEmail,
-                    contactPhone: json.condominium.contactPhone,
+                    name: updated.name,
+                    cnpj: updated.cnpj,
+                    city: updated.city,
+                    manager: updated.manager,
+                    contactEmail: updated.contactEmail,
+                    contactPhone: updated.contactPhone,
                   }
                 : c
             )

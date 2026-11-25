@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { AiUploadPanel } from "./AiUploadPanel";
 import { createBlankQuotation, formatDateLongBR, todayISO } from "@/lib/calculations";
+import { safeJson } from "@/lib/http";
 import { CATEGORIES, type QuotationKind } from "@/lib/types";
 
 interface NewMapClientProps {
@@ -51,7 +52,7 @@ export function NewMapClient({ condominiumNames }: NewMapClientProps) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      const json = await res.json();
+      const json = await safeJson<{ id?: string; error?: string }>(res);
       if (!res.ok || !json.id) {
         throw new Error(json.error || "Não foi possível criar o mapa.");
       }
@@ -217,7 +218,7 @@ export function NewMapClient({ condominiumNames }: NewMapClientProps) {
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(draft),
               });
-              const json = await res.json();
+              const json = await safeJson<{ id?: string; error?: string }>(res);
               if (!res.ok || !json.id) {
                 throw new Error(json.error || "Erro ao salvar mapa gerado.");
               }

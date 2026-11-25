@@ -14,7 +14,7 @@ import type {
   QuotationRecord,
 } from "./types";
 
-export const DEFAULT_GEMINI_MODEL = "gemini-4-hydrogen";
+export const DEFAULT_GEMINI_MODEL = "gemini-3.5-flash-lite";
 
 export function maskApiKey(key: string): string {
   const trimmed = key.trim();

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Plus, Sparkles } from "lucide-react";
+import { BrandLogo } from "./BrandLogo";
 
 const NAV_ITEMS = [
   { href: "/", label: "Painel", match: (p: string) => p === "/" },
@@ -25,12 +26,7 @@ export function SiteHeader() {
             aria-label="Gerencial — início"
             className="rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-brand"
           >
-            <img
-              src="/identidade/logo.png"
-              alt="Gerencial — Governança Condominial"
-              style={{ height: 26 }}
-              className="w-auto max-w-full"
-            />
+            <BrandLogo height={26} />
           </Link>
 
           <nav className="hidden items-center gap-1 md:flex" aria-label="Navegação principal">

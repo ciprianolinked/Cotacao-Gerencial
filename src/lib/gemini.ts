@@ -17,20 +17,44 @@ import {
 
 /**
  * Ordem de preferência dos modelos Gemini.
- * 1º gemini-4-hydrogen — equilíbrio entre velocidade e inteligência (nov/2026)
- * 2º gemini-3.5-flash-lite — mais rápido e econômico (jul/2026, document parsing)
- * Demais: modelos atuais de fallback para quando houver lentidão ou erro 503.
+ * 1º gemini-3.5-flash-lite — mais rápido, econômico e estável na cota gratuita
+ * 2º gemini-4-hydrogen — equilíbrio entre velocidade e inteligência
+ * Demais: fallback automático caso algum modelo apresente 503/429/lentidão.
  */
 export const MODEL_CANDIDATES = [
-  "gemini-4-hydrogen",
   "gemini-3.5-flash-lite",
+  "gemini-4-hydrogen",
   "gemini-3.8-flash",
   "gemini-3.1-flash-lite",
   "gemini-2.5-flash-lite",
 ] as const;
 
-const REQUEST_TIMEOUT_MS = 55_000;
-const MAX_ATTEMPTS_PER_MODEL = 2;
+export const SELECTABLE_MODELS: {
+  id: string;
+  label: string;
+  description: string;
+}[] = [
+  {
+    id: "gemini-3.5-flash-lite",
+    label: "gemini-3.5-flash-lite (recomendado · mais rápido e econômico)",
+    description: "Baixa latência, alta disponibilidade na cota gratuita",
+  },
+  {
+    id: "gemini-4-hydrogen",
+    label: "gemini-4-hydrogen (equilíbrio velocidade e inteligência)",
+    description: "Alterna automaticamente para 3.5-flash-lite em caso de 503",
+  },
+  {
+    id: "gemini-3.8-flash",
+    label: "gemini-3.8-flash",
+    description: "Modelo intermediário para documentos complexos",
+  },
+  {
+    id: "gemini-3.1-flash-lite",
+    label: "gemini-3.1-flash-lite",
+    description: "Fallback econômico da série 3.1",
+  },
+];
 
 function buildEndpoint(model: string, apiKey: string): string {
   return `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
@@ -46,11 +70,23 @@ export interface GeminiCallResult {
   attempts: { model: string; ok: boolean; detail?: string }[];
 }
 
+interface FallbackOptions {
+  timeoutMs?: number;
+  maxAttemptsPerModel?: number;
+  totalBudgetMs?: number;
+}
+
 export async function callGeminiWithFallback(
   apiKey: string,
   preferredModel: string,
-  body: Record<string, unknown>
+  body: Record<string, unknown>,
+  options: FallbackOptions = {}
 ): Promise<GeminiCallResult> {
+  const timeoutMs = options.timeoutMs ?? 20_000;
+  const maxAttemptsPerModel = options.maxAttemptsPerModel ?? 1;
+  const totalBudgetMs = options.totalBudgetMs ?? 50_000;
+  const startedAt = Date.now();
+
   const ordered = [
     preferredModel,
     ...MODEL_CANDIDATES.filter((m) => m !== preferredModel),
@@ -60,13 +96,20 @@ export async function callGeminiWithFallback(
   let lastError = "Não foi possível comunicar com o Google Gemini.";
 
   for (const model of ordered) {
-    for (let attempt = 1; attempt <= MAX_ATTEMPTS_PER_MODEL; attempt++) {
+    for (let attempt = 1; attempt <= maxAttemptsPerModel; attempt++) {
+      const elapsed = Date.now() - startedAt;
+      const remaining = totalBudgetMs - elapsed;
+      if (remaining < 2_500) {
+        break;
+      }
+      const effectiveTimeout = Math.min(timeoutMs, remaining - 500);
+
       try {
         const res = await fetch(buildEndpoint(model, apiKey), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
-          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+          signal: AbortSignal.timeout(effectiveTimeout),
         });
 
         if (res.ok) {
@@ -81,7 +124,7 @@ export async function callGeminiWithFallback(
         const msg = errData.error?.message || `HTTP ${res.status}`;
         lastError = `[${model}] ${msg}`;
 
-        // Erros de chave/permissão: não adianta trocar de modelo
+        // Erros de chave/permissão: falha imediata
         if (
           (res.status === 400 || res.status === 401 || res.status === 403) &&
           /api key|permission|unauthenticated|invalid|expired/i.test(msg)
@@ -92,18 +135,12 @@ export async function callGeminiWithFallback(
           );
         }
 
-        // 429 (cota) ou 5xx (sobrecarga/lentidão): tenta de novo / próximo modelo
-        if (res.status === 429 || res.status >= 500) {
-          attempts.push({ model, ok: false, detail: `HTTP ${res.status}` });
-          if (attempt < MAX_ATTEMPTS_PER_MODEL) {
-            await sleep(1200);
-            continue;
-          }
-          break; // próximo modelo
-        }
-
-        // Demais 4xx (payload inválido etc.): tenta próximo modelo
+        // 429 ou 5xx: pula direto para o próximo modelo se maxAttemptsPerModel === 1
         attempts.push({ model, ok: false, detail: `HTTP ${res.status}` });
+        if ((res.status === 429 || res.status >= 500) && attempt < maxAttemptsPerModel) {
+          await sleep(800);
+          continue;
+        }
         break;
       } catch (err) {
         if (err instanceof Error && /Chave inválida/.test(err.message)) {
@@ -115,8 +152,12 @@ export async function callGeminiWithFallback(
         const detail = isTimeout ? "timeout" : "rede indisponível";
         lastError = `[${model}] ${detail}`;
         attempts.push({ model, ok: false, detail });
-        break; // próximo modelo
+        break;
       }
+    }
+
+    if (Date.now() - startedAt >= totalBudgetMs - 2_500) {
+      break;
     }
   }
 
@@ -166,6 +207,11 @@ export async function testGeminiConnection(
         },
       ],
       generationConfig: { maxOutputTokens: 10 },
+    },
+    {
+      timeoutMs: 7_500,
+      maxAttemptsPerModel: 1,
+      totalBudgetMs: 24_000,
     }
   );
 
@@ -280,7 +326,12 @@ REGRAS RIGOROSAS:
   const { json, modelUsed } = await callGeminiWithFallback(
     params.apiKey,
     params.model,
-    body
+    body,
+    {
+      timeoutMs: 22_000,
+      maxAttemptsPerModel: 1,
+      totalBudgetMs: 48_000,
+    }
   );
 
   const rawText = extractTextFromGemini(json);
@@ -477,11 +528,20 @@ Se não encontrar preço exato, use price: null. Nunca invente URLs falsas; use 
   let json: Record<string, unknown>;
   let modelUsed = params.model;
   try {
-    const res = await callGeminiWithFallback(params.apiKey, params.model, {
-      contents: [{ parts: [{ text: prompt }] }],
-      tools: [{ google_search: {} }],
-      generationConfig: { temperature: 0.1 },
-    });
+    const res = await callGeminiWithFallback(
+      params.apiKey,
+      params.model,
+      {
+        contents: [{ parts: [{ text: prompt }] }],
+        tools: [{ google_search: {} }],
+        generationConfig: { temperature: 0.1 },
+      },
+      {
+        timeoutMs: 14_000,
+        maxAttemptsPerModel: 1,
+        totalBudgetMs: 28_000,
+      }
+    );
     json = res.json;
     modelUsed = res.modelUsed;
   } catch (err) {

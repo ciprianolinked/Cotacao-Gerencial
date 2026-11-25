@@ -23,6 +23,7 @@ import {
   formatSize,
   recordedSavings,
 } from "@/lib/calculations";
+import { safeJson } from "@/lib/http";
 import {
   STATUS_META,
   type PdfDownloadRecord,
@@ -233,7 +234,7 @@ export function IndicatorsClient({
     setRefreshingDownloads(true);
     try {
       const res = await fetch("/api/pdf-downloads");
-      const json = await res.json();
+      const json = await safeJson<{ downloads?: PdfDownloadRecord[] }>(res);
       if (res.ok && json.downloads) {
         setDownloads(json.downloads);
       }
@@ -254,8 +255,12 @@ export function IndicatorsClient({
           endDate,
         }),
       });
-      const json = await res.json();
-      if (!res.ok || !json.base64) {
+      const json = await safeJson<{
+        error?: string;
+        fileName?: string;
+        base64?: string;
+      }>(res);
+      if (!res.ok || !json.base64 || !json.fileName) {
         throw new Error(json.error || "Erro ao gerar PDF.");
       }
 
