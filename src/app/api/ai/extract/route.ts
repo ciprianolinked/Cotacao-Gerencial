@@ -3,6 +3,9 @@ import { getAiConfig } from "@/lib/server-data";
 import { extractQuotationWithGemini, searchProductsWithGemini } from "@/lib/gemini";
 import { parseQuotationText } from "@/lib/calculations";
 
+export const runtime = "nodejs";
+export const maxDuration = 60;
+
 export async function POST(request: Request) {
   try {
     const contentType = request.headers.get("content-type") || "";

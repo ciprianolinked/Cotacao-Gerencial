@@ -1,16 +1,25 @@
 import { CondominiumsClient } from "@/components/CondominiumsClient";
-import { DbUnavailable } from "@/components/DbUnavailable";
-import { safeLoad } from "@/lib/safe-load";
-import { listCondominiums } from "@/lib/server-data";
+import { DbErrorBanner } from "@/components/DbErrorBanner";
+import { formatDatabaseError, listCondominiums } from "@/lib/server-data";
+import type { CondominiumRecord } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
 export default async function CondominiumsPage() {
-  const { data, error } = await safeLoad(() => listCondominiums());
+  let list: CondominiumRecord[] = [];
+  let dbError: string | null = null;
 
-  if (error || !data) {
-    return <DbUnavailable reason={error ?? undefined} />;
+  try {
+    list = await listCondominiums();
+  } catch (err) {
+    console.error("CondominiumsPage database error:", err);
+    dbError = formatDatabaseError(err);
   }
 
-  return <CondominiumsClient initial={data} />;
+  return (
+    <>
+      {dbError && <DbErrorBanner message={dbError} />}
+      <CondominiumsClient initial={list} />
+    </>
+  );
 }

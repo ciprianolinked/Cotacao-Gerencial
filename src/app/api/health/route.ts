@@ -1,28 +1,33 @@
-import { db, isDatabaseConfigured } from "@/db";
 import { sql } from "drizzle-orm";
+import { db, isDatabaseConfigured } from "@/db";
+import { ensureSchema } from "@/db/bootstrap";
+import { formatDatabaseError } from "@/lib/server-data";
 
+export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+export const maxDuration = 30;
 
 export async function GET() {
-  if (!isDatabaseConfigured()) {
+  const configured = isDatabaseConfigured();
+  try {
+    await db.execute(sql`select 1`);
+    await ensureSchema();
+    return Response.json({
+      ok: true,
+      databaseConfigured: configured,
+      schemaReady: true,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("GET /api/health error:", error);
     return Response.json(
       {
         ok: false,
-        configured: false,
-        error:
-          "DATABASE_URL ausente. Configure a variável de ambiente no projeto Vercel.",
+        databaseConfigured: configured,
+        schemaReady: false,
+        error: formatDatabaseError(error),
+        timestamp: new Date().toISOString(),
       },
-      { status: 503 }
-    );
-  }
-
-  try {
-    await db.execute(sql`select 1`);
-    return Response.json({ ok: true, configured: true });
-  } catch (error) {
-    console.error("Health check failed:", error);
-    return Response.json(
-      { ok: false, configured: true, error: "Banco de dados inacessível." },
       { status: 500 }
     );
   }

@@ -2,6 +2,9 @@ import { NextResponse } from "next/server";
 import { getAiConfig } from "@/lib/server-data";
 import { searchProductsWithGemini } from "@/lib/gemini";
 
+export const runtime = "nodejs";
+export const maxDuration = 60;
+
 export async function POST(request: Request) {
   try {
     const body = (await request.json()) as {

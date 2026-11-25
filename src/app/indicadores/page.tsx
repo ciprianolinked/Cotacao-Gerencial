@@ -1,8 +1,12 @@
 import type { Metadata } from "next";
+import { DbErrorBanner } from "@/components/DbErrorBanner";
 import { IndicatorsClient } from "@/components/IndicatorsClient";
-import { DbUnavailable } from "@/components/DbUnavailable";
-import { safeLoad } from "@/lib/safe-load";
-import { listPdfDownloads, listQuotations } from "@/lib/server-data";
+import {
+  formatDatabaseError,
+  listPdfDownloads,
+  listQuotations,
+} from "@/lib/server-data";
+import type { PdfDownloadRecord, QuotationRecord } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
@@ -11,21 +15,24 @@ export const metadata: Metadata = {
 };
 
 export default async function IndicatorsPage() {
-  const [quotationsRes, downloadsRes] = await Promise.all([
-    safeLoad(() => listQuotations()),
-    safeLoad(() => listPdfDownloads(20)),
-  ]);
+  let quotations: QuotationRecord[] = [];
+  let downloads: PdfDownloadRecord[] = [];
+  let dbError: string | null = null;
 
-  const error = quotationsRes.error || downloadsRes.error;
-
-  if (error || !quotationsRes.data) {
-    return <DbUnavailable reason={error ?? undefined} />;
+  try {
+    [quotations, downloads] = await Promise.all([
+      listQuotations(),
+      listPdfDownloads(20),
+    ]);
+  } catch (err) {
+    console.error("IndicatorsPage database error:", err);
+    dbError = formatDatabaseError(err);
   }
 
   return (
-    <IndicatorsClient
-      quotations={quotationsRes.data}
-      initialDownloads={downloadsRes.data ?? []}
-    />
+    <>
+      {dbError && <DbErrorBanner message={dbError} />}
+      <IndicatorsClient quotations={quotations} initialDownloads={downloads} />
+    </>
   );
 }

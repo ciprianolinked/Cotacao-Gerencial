@@ -1,16 +1,25 @@
+import { DbErrorBanner } from "@/components/DbErrorBanner";
 import { NewMapClient } from "@/components/NewMapClient";
-import { DbUnavailable } from "@/components/DbUnavailable";
-import { safeLoad } from "@/lib/safe-load";
-import { listCondominiums } from "@/lib/server-data";
+import { formatDatabaseError, listCondominiums } from "@/lib/server-data";
 
 export const dynamic = "force-dynamic";
 
 export default async function NewMapPage() {
-  const { data, error } = await safeLoad(() => listCondominiums());
+  let names: string[] = [];
+  let dbError: string | null = null;
 
-  if (error || !data) {
-    return <DbUnavailable reason={error ?? undefined} />;
+  try {
+    const condos = await listCondominiums();
+    names = condos.map((c) => c.name);
+  } catch (err) {
+    console.error("NewMapPage database error:", err);
+    dbError = formatDatabaseError(err);
   }
 
-  return <NewMapClient condominiumNames={data.map((c) => c.name)} />;
+  return (
+    <>
+      {dbError && <DbErrorBanner message={dbError} />}
+      <NewMapClient condominiumNames={names} />
+    </>
+  );
 }

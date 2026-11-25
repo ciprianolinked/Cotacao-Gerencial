@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 import { getAiConfig } from "@/lib/server-data";
 
+export const runtime = "nodejs";
+export const maxDuration = 30;
+
 export async function GET() {
   try {
     const cfg = await getAiConfig();

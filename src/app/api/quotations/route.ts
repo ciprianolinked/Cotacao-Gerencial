@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import { db } from "@/db";
+import { ensureSchema } from "@/db/bootstrap";
 import { quotations } from "@/db/schema";
+
+export const runtime = "nodejs";
+export const maxDuration = 30;
 import {
   ensureCondominiumExists,
   generateNextProtocol,
@@ -24,6 +28,7 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
+    await ensureSchema();
     const body = (await request.json().catch(() => ({}))) as Partial<QuotationData>;
     const draft = createBlankQuotation(body);
     const protocol = await generateNextProtocol();

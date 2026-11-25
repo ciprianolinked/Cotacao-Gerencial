@@ -1,8 +1,12 @@
 import type { Metadata } from "next";
 import { AiConfigClient } from "@/components/AiConfigClient";
-import { DbUnavailable } from "@/components/DbUnavailable";
-import { safeLoad } from "@/lib/safe-load";
-import { getAiConfig } from "@/lib/server-data";
+import { DbErrorBanner } from "@/components/DbErrorBanner";
+import { isDatabaseConfigured } from "@/db";
+import {
+  DEFAULT_GEMINI_MODEL,
+  formatDatabaseError,
+  getAiConfig,
+} from "@/lib/server-data";
 
 export const dynamic = "force-dynamic";
 
@@ -11,20 +15,32 @@ export const metadata: Metadata = {
 };
 
 export default async function ConfiguracoesPage() {
-  const { data, error } = await safeLoad(() => getAiConfig());
-
-  if (error || !data) {
-    return <DbUnavailable reason={error ?? undefined} />;
+  let dbError: string | null = null;
+  if (!isDatabaseConfigured()) {
+    dbError = formatDatabaseError(null);
   }
 
+  const cfg = await getAiConfig().catch((err) => {
+    dbError = formatDatabaseError(err);
+    return {
+      configured: false,
+      source: "none" as const,
+      maskedKey: null,
+      model: DEFAULT_GEMINI_MODEL,
+    };
+  });
+
   return (
-    <AiConfigClient
-      initialStatus={{
-        configured: data.configured,
-        source: data.source,
-        maskedKey: data.maskedKey,
-        model: data.model,
-      }}
-    />
+    <>
+      {dbError && <DbErrorBanner message={dbError} />}
+      <AiConfigClient
+        initialStatus={{
+          configured: cfg.configured,
+          source: cfg.source,
+          maskedKey: cfg.maskedKey,
+          model: cfg.model,
+        }}
+      />
+    </>
   );
 }

@@ -1,11 +1,12 @@
 import { NextResponse } from "next/server";
 import { db } from "@/db";
 import { pdfDownloads } from "@/db/schema";
+
+export const runtime = "nodejs";
+export const maxDuration = 30;
 import { getQuotationById } from "@/lib/server-data";
 import { generateQuotationPdf } from "@/lib/pdf-generator";
 import { sanitizeSlug } from "@/lib/calculations";
-
-export const maxDuration = 30;
 
 export async function POST(
   _request: Request,

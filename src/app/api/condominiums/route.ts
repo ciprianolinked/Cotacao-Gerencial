@@ -1,7 +1,11 @@
 import { NextResponse } from "next/server";
 import { db } from "@/db";
+import { ensureSchema } from "@/db/bootstrap";
 import { condominiums } from "@/db/schema";
 import { listCondominiums } from "@/lib/server-data";
+
+export const runtime = "nodejs";
+export const maxDuration = 30;
 
 function normalizeCnpj(raw?: string | null): string | null {
   if (!raw) return null;
@@ -40,6 +44,7 @@ export async function POST(request: Request) {
       );
     }
 
+    await ensureSchema();
     const [created] = await db
       .insert(condominiums)
       .values({

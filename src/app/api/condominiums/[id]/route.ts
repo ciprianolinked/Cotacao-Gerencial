@@ -1,7 +1,11 @@
 import { NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
+import { ensureSchema } from "@/db/bootstrap";
 import { condominiums, quotations } from "@/db/schema";
+
+export const runtime = "nodejs";
+export const maxDuration = 30;
 
 function normalizeCnpj(raw?: string | null): string | null | undefined {
   if (raw === undefined) return undefined;
@@ -15,6 +19,7 @@ export async function PATCH(
   context: { params: Promise<{ id: string }> }
 ) {
   try {
+    await ensureSchema();
     const { id } = await context.params;
     const existingRows = await db
       .select()
@@ -86,6 +91,7 @@ export async function DELETE(
   context: { params: Promise<{ id: string }> }
 ) {
   try {
+    await ensureSchema();
     const { id } = await context.params;
     await db.delete(condominiums).where(eq(condominiums.id, id));
     return NextResponse.json({ ok: true });

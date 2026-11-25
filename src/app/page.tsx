@@ -1,36 +1,52 @@
 import { DashboardClient } from "@/components/DashboardClient";
-import { DbUnavailable } from "@/components/DbUnavailable";
-import { safeLoad } from "@/lib/safe-load";
+import { DbErrorBanner } from "@/components/DbErrorBanner";
 import {
+  DEFAULT_GEMINI_MODEL,
+  formatDatabaseError,
   getAiConfig,
   listCondominiums,
   listQuotations,
 } from "@/lib/server-data";
+import type { CondominiumRecord, QuotationRecord } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
 export default async function HomePage() {
-  const [quotationsRes, condosRes, aiRes] = await Promise.all([
-    safeLoad(() => listQuotations()),
-    safeLoad(() => listCondominiums()),
-    safeLoad(() => getAiConfig()),
-  ]);
+  let quotations: QuotationRecord[] = [];
+  let condominiums: CondominiumRecord[] = [];
+  let aiConfigured = false;
+  let aiModel = DEFAULT_GEMINI_MODEL;
+  let dbError: string | null = null;
 
-  const error = quotationsRes.error || condosRes.error || aiRes.error;
-
-  if (error || !quotationsRes.data || !condosRes.data) {
-    return <DbUnavailable reason={error ?? undefined} />;
+  try {
+    const [qList, cList, aiCfg] = await Promise.all([
+      listQuotations(),
+      listCondominiums(),
+      getAiConfig(),
+    ]);
+    quotations = qList;
+    condominiums = cList;
+    aiConfigured = aiCfg.configured;
+    aiModel = aiCfg.model;
+  } catch (err) {
+    console.error("HomePage database error:", err);
+    dbError = formatDatabaseError(err);
+    const aiCfg = await getAiConfig().catch(() => null);
+    if (aiCfg) {
+      aiConfigured = aiCfg.configured;
+      aiModel = aiCfg.model;
+    }
   }
 
-  const aiConfigured = aiRes.data?.configured ?? false;
-  const aiModel = aiRes.data?.model ?? "";
-
   return (
-    <DashboardClient
-      quotations={quotationsRes.data}
-      condominiums={condosRes.data}
-      aiConfigured={aiConfigured}
-      aiModel={aiModel}
-    />
+    <>
+      {dbError && <DbErrorBanner message={dbError} />}
+      <DashboardClient
+        quotations={quotations}
+        condominiums={condominiums}
+        aiConfigured={aiConfigured}
+        aiModel={aiModel}
+      />
+    </>
   );
 }

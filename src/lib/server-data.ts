@@ -1,5 +1,6 @@
 import { desc, eq, sql } from "drizzle-orm";
-import { db } from "@/db";
+import { db, isDatabaseConfigured } from "@/db";
+import { ensureSchema } from "@/db/bootstrap";
 import {
   appSettings,
   condominiums,
@@ -21,6 +22,26 @@ export function maskApiKey(key: string): string {
   return `${trimmed.slice(0, 4)}••••${trimmed.slice(-4)}`;
 }
 
+export function formatDatabaseError(error: unknown): string {
+  if (!isDatabaseConfigured()) {
+    return "Variável DATABASE_URL (ou POSTGRES_URL) não encontrada. Cadastre a URL do PostgreSQL nas Environment Variables da Vercel e faça um novo deploy.";
+  }
+  const msg = error instanceof Error ? error.message : String(error ?? "");
+  if (/ECONNREFUSED|127\.0\.0\.1/i.test(msg)) {
+    return "O aplicativo tentou conectar a um PostgreSQL local (127.0.0.1) inacessível na Vercel. Configure DATABASE_URL com a string do seu banco na nuvem (Neon, Supabase ou Vercel Postgres).";
+  }
+  if (/timeout|ETIMEDOUT/i.test(msg)) {
+    return "Tempo esgotado ao conectar ao PostgreSQL. Verifique se o banco está ativo e se o host/porta estão liberados.";
+  }
+  if (/password authentication failed|28P01/i.test(msg)) {
+    return "Falha de autenticação no PostgreSQL. Confira usuário e senha em DATABASE_URL.";
+  }
+  if (/SSL|certificate/i.test(msg)) {
+    return "Erro de certificado SSL ao conectar ao PostgreSQL. Confira os parâmetros da string DATABASE_URL.";
+  }
+  return "Não foi possível conectar ao banco de dados PostgreSQL no momento.";
+}
+
 export async function getAiConfig(): Promise<{
   configured: boolean;
   source: "env" | "db" | "none";
@@ -28,23 +49,35 @@ export async function getAiConfig(): Promise<{
   maskedKey: string | null;
   model: string;
 }> {
-  const envKey = process.env.GEMINI_API_KEY?.trim();
-  const modelRow = await db
-    .select()
-    .from(appSettings)
-    .where(eq(appSettings.key, "gemini_model"))
-    .limit(1);
-  const model =
-    modelRow[0]?.value?.trim() ||
-    process.env.GEMINI_MODEL?.trim() ||
-    DEFAULT_GEMINI_MODEL;
+  const envKey = process.env.GEMINI_API_KEY?.trim() || null;
+  const envModel = process.env.GEMINI_MODEL?.trim() || DEFAULT_GEMINI_MODEL;
 
-  const dbKeyRow = await db
-    .select()
-    .from(appSettings)
-    .where(eq(appSettings.key, "gemini_api_key"))
-    .limit(1);
-  const dbKey = dbKeyRow[0]?.value?.trim();
+  let dbKey: string | null = null;
+  let dbModel: string | null = null;
+
+  if (isDatabaseConfigured()) {
+    try {
+      await ensureSchema();
+      const [modelRow, dbKeyRow] = await Promise.all([
+        db
+          .select()
+          .from(appSettings)
+          .where(eq(appSettings.key, "gemini_model"))
+          .limit(1),
+        db
+          .select()
+          .from(appSettings)
+          .where(eq(appSettings.key, "gemini_api_key"))
+          .limit(1),
+      ]);
+      dbModel = modelRow[0]?.value?.trim() || null;
+      dbKey = dbKeyRow[0]?.value?.trim() || null;
+    } catch (err) {
+      console.warn("getAiConfig: fallback para env vars (banco indisponível):", err);
+    }
+  }
+
+  const model = dbModel || envModel;
 
   if (dbKey) {
     return {
@@ -158,6 +191,7 @@ export async function getQuotationById(
 }
 
 export async function generateNextProtocol(): Promise<string> {
+  await ensureSchema();
   const year = new Date().getFullYear();
   const prefix = `MC-${year}-`;
   const rows = await db
@@ -177,6 +211,7 @@ export async function generateNextProtocol(): Promise<string> {
 export async function ensureCondominiumExists(name: string): Promise<void> {
   const trimmed = name.trim();
   if (!trimmed) return;
+  await ensureSchema();
   await db
     .insert(condominiums)
     .values({ name: trimmed })
@@ -202,7 +237,9 @@ export async function listCondominiums(): Promise<CondominiumRecord[]> {
   }
 
   // Also include any condominium names that exist only on quotations
-  const existingKeys = new Set(condoRows.map((c) => c.name.trim().toLowerCase()));
+  const existingKeys = new Set(
+    condoRows.map((c) => c.name.trim().toLowerCase())
+  );
   for (const c of countsRows) {
     const key = c.condominium.trim().toLowerCase();
     if (key && !existingKeys.has(key)) {
@@ -214,7 +251,10 @@ export async function listCondominiums(): Promise<CondominiumRecord[]> {
     }
   }
 
-  const finalRows = await db.select().from(condominiums).orderBy(condominiums.name);
+  const finalRows = await db
+    .select()
+    .from(condominiums)
+    .orderBy(condominiums.name);
   return finalRows.map((c) => ({
     id: c.id,
     name: c.name,
@@ -227,7 +267,9 @@ export async function listCondominiums(): Promise<CondominiumRecord[]> {
   }));
 }
 
-export async function listPdfDownloads(limit = 20): Promise<PdfDownloadRecord[]> {
+export async function listPdfDownloads(
+  limit = 20
+): Promise<PdfDownloadRecord[]> {
   await ensureSeeded();
   const rows = await db
     .select()

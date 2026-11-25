@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import { db } from "./index";
+import { ensureSchema } from "./bootstrap";
 import { condominiums, pdfDownloads, quotations } from "./schema";
 import { generateAutomaticAnalysis } from "@/lib/calculations";
 import type { QuotationData } from "@/lib/types";
@@ -31,10 +32,11 @@ function buildSeedMap(
 }
 
 export async function ensureSeeded(): Promise<void> {
+  await ensureSchema();
   if (!seedPromise) {
     seedPromise = runSeed().catch((err) => {
       seedPromise = null;
-      console.error("Seed error:", err);
+      throw err;
     });
   }
   await seedPromise;

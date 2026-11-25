@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
+
+export const runtime = "nodejs";
+export const maxDuration = 30;
 import { quotations } from "@/db/schema";
 import { ensureCondominiumExists, getQuotationById } from "@/lib/server-data";
 import type { QuotationData } from "@/lib/types";

@@ -1,9 +1,13 @@
 import { NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
+import { ensureSchema } from "@/db/bootstrap";
 import { appSettings } from "@/db/schema";
 import { DEFAULT_GEMINI_MODEL, getAiConfig, maskApiKey } from "@/lib/server-data";
 import { testGeminiConnection } from "@/lib/gemini";
+
+export const runtime = "nodejs";
+export const maxDuration = 30;
 
 export async function POST(request: Request) {
   try {
@@ -19,6 +23,8 @@ export async function POST(request: Request) {
     }
 
     const testResult = await testGeminiConnection(apiKey, preferredModel);
+
+    await ensureSchema();
 
     await db
       .insert(appSettings)
@@ -93,6 +99,7 @@ export async function PUT() {
 
 export async function DELETE() {
   try {
+    await ensureSchema();
     await db.delete(appSettings).where(eq(appSettings.key, "gemini_api_key"));
     const cfg = await getAiConfig();
     return NextResponse.json({

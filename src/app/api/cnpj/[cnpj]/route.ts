@@ -1,5 +1,8 @@
 import { NextResponse } from "next/server";
 
+export const runtime = "nodejs";
+export const maxDuration = 30;
+
 const BRASILAPI_URL = (digits: string) =>
   `https://brasilapi.com.br/api/cnpj/v1/${digits}`;
 const RECEITAWS_URL = (digits: string) =>

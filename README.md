@@ -1,101 +1,69 @@
-# Gerencial — Mapa de Cotação
+# Gerencial · Mapa de Cotação
 
-Plataforma de governança condominial da **Gerencial** para elaborar, comparar
-e aprovar **mapas de cotação** com apoio de **inteligência artificial gratuita**
-(Google Gemini). A aplicação gera documentos institucionais prontos para
-assembleia/conselho, assinatura e anexo ao processo de compras do condomínio.
+Plataforma de governança condominial da **Gerencial** para elaborar, comparar, apresentar em assembleia e aprovar mapas de cotação com apoio de inteligência artificial gratuita (Google Gemini).
 
-## Stack
+## Principais funcionalidades
 
-| Camada | Tecnologia |
-|---|---|
-| Framework | Next.js (App Router) + React |
-| Banco | PostgreSQL + Drizzle ORM |
-| Estilização | Tailwind CSS v4 |
-| Documentos | `pdf-lib` (PDF institucional A4) |
-| IA | Google Gemini API (cota gratuita) |
-| Testes | `node:test` + `tsx` |
+- **Painel de cotações (`/`)**: resumo do portfólio, economia potencial, filtro por status e busca dedicada por campo (protocolo, condomínio, objeto, descrição, categoria, data, fornecedor, melhor valor, economia ou status).
+- **Novo mapa com IA (`/mapas/novo`)**: leitura automática de PDFs e fotos (JPG, PNG, WEBP) com alternância automática entre modelos do Google Gemini (`gemini-4-hydrogen` → `gemini-3.5-flash-lite` → `gemini-3.8-flash` → `gemini-3.1-flash-lite` → `gemini-2.5-flash-lite`) para contornar erros 503/lentidão, além de leitor de texto colado sem IA e criação em branco.
+- **Editor e documento institucional (`/mapas/[id]`)**:
+  - Cabeçalho editável (condomínio, data, A/C, objeto, natureza Serviço/Produtos e categoria);
+  - Até 5 fornecedores com condições comerciais, links de compra e selo *Loja confiável*;
+  - Tabela comparativa por item com classificação de custo (`Mão de obra`, `Material`, `Não discriminado`), destaque automático do menor preço e totais em tempo real;
+  - Parecer técnico e recomendação automáticos (editáveis);
+  - Registro de resultado confirmado da contratação;
+  - Pré-visualização `.doc-sheet`, impressão A4 pelo navegador e geração de PDF real no servidor (`pdf-lib`).
+- **Base de condomínios (`/condominios`)**: cadastro e edição com busca automática de dados pelo **CNPJ** (Receita Federal via BrasilAPI com fallback ReceitaWS).
+- **Indicadores para assembleia (`/indicadores`)**: filtros por condomínio e período, economia confirmada vs. potencial, evolução mensal, composição por tipo de custo, histórico de PDFs baixados, exportação CSV, PDF e impressão.
+- **Configuração de IA (`/configuracoes`)** e **Central de ajuda (`/ajuda`, `/ajuda/ia`)**.
 
-## Estrutura
+## Estrutura do projeto
 
 ```text
-src/
-  app/                 # Rotas
-    page.tsx           # Painel (KPIs, filtros de busca, tabela de mapas)
-    mapas/novo/        # Novo mapa (contexto + leitura com IA + texto colado)
-    mapas/[id]/        # Editor e visualizador do documento institucional
-    condominios/       # Base de condomínios e associações (cadastro por CNPJ)
-    indicadores/       # Dashboard de assembleia (CSV/PDF/impressão)
-    configuracoes/     # Configuração da chave gratuita do Gemini
-    ajuda/             # Central de ajuda e guia ilustrado da IA
-    api/               # Rotas REST (mapas, condomínios, IA, CNPJ, PDFs)
-  components/          # UI compartilhada (editor, painel IA, documento, etc.)
-  db/                  # Schema Drizzle + seed automático
-  lib/                 # Lógica: cálculos, PDF, Gemini, CNPJ, logo embutida
-tests/                 # Testes unitários (node:test)
-public/identidade/     # Identidade visual (logo, símbolo)
+├── public/                 # Identidade visual (logo.png, simbolo.png, favicon.ico)
+├── src/
+│   ├── app/                # Rotas Next.js App Router e APIs (/api/*)
+│   ├── components/         # Interface cliente e folha de documento institucional
+│   ├── db/                 # Conexão PostgreSQL (lazy + SSL), schema Drizzle, bootstrap e seed
+│   └── lib/                # Cálculos, integração Gemini com fallback, gerador de PDF
+├── tests/                  # Testes automatizados (node --test)
+├── .env.example            # Modelo de variáveis de ambiente
+├── .gitignore              # Ignora .env local, .next, node_modules e .vercel
+├── drizzle.config.ts       # Configuração do Drizzle Kit (lê DATABASE_URL/POSTGRES_URL)
+├── next.config.ts          # Next.js + empacotamento de assets para funções serverless
+└── vercel.json             # Região gru1 (São Paulo) e headers HTTP na Vercel
 ```
 
-## Configuração
+## Executando localmente
 
-1. Copie `.env.example` para `.env` e preencha:
-   - `DATABASE_URL` — conexão PostgreSQL (obrigatória)
-   - `GEMINI_API_KEY` — chave gratuita do Google AI Studio (opcional)
-   - `GEMINI_MODEL` — modelo principal usado na leitura (padrão `gemini-4-hydrogen`)
-2. Instale as dependências e aplique o schema:
+1. Copie `.env.example` para `.env` e ajuste `DATABASE_URL`:
+   ```bash
+   cp .env.example .env
+   ```
+2. Instale as dependências:
+   ```bash
+   npm install
+   ```
+3. (Opcional) Sincronize o schema manualmente com o Drizzle Kit — o aplicativo também cria/atualiza tabelas automaticamente na primeira requisição:
+   ```bash
+   npx drizzle-kit push
+   ```
+4. Inicie o servidor de desenvolvimento:
+   ```bash
+   npm run dev
+   ```
+5. Execute os testes:
+   ```bash
+   node --test tests/*.test.mjs
+   ```
 
-```bash
-npm install
-npx drizzle-kit push
-```
+## Deploy na Vercel
 
-3. Rode o servidor local:
-
-```bash
-npm run dev   # http://localhost:3000
-```
-
-Na Vercel, configure a mesma variável `DATABASE_URL` no painel do projeto
-(Settings → Environment Variables). Os arquivos `.env*` são ignorados pelo
-`.gitignore` e nunca são publicados. O seed inicial (condomínios, mapas de
-exemplo, histórico de PDFs) roda **automaticamente na primeira requisição** com
-banco vazio.
-
-## Rotas principais
-
-| Rota | Descrição |
-|---|---|
-| `/` | Painel: KPIs, último mapa, tabela de mapas com busca por campo, barra lateral |
-| `/mapas/novo` | Criação de novo mapa (IA gratuita ou texto colado) |
-| `/mapas/[id]` | Editor completo + pré-visualização do documento + download de PDF |
-| `/condominios` | Cadastro completo com consulta por CNPJ na Receita Federal |
-| `/indicadores` | Dashboard para assembleia (CSV, PDF, impressão) |
-| `/configuracoes` | Conexão e teste da chave gratuita do Google Gemini |
-| `/ajuda` e `/ajuda/ia` | Central de ajuda + guia ilustrado de 2 minutos |
-
-## Fluxo de leitura com IA
-
-1. Anexe PDFs/fotos (até 6 arquivos) ou cole o texto das propostas;
-2. O sistema chama o Gemini com **alternância automática de modelos**:
-   `gemini-4-hydrogen` → `gemini-3.5-flash-lite` → `gemini-3.8-flash` →
-   `gemini-3.1-flash-lite` → `gemini-2.5-flash-lite`, com retry em erros 429/5xx;
-3. A IA retorna fornecedores, itens, quantidades e preços unitários, que são
-   fundidos ao mapa automaticamente.
-
-Sem a IA configurada, a plataforma funciona normalmente com texto colado e
-preenchimento manual.
-
-## Testes
-
-```bash
-npx tsx --test tests/*.test.ts
-```
-
-## Deploy (Vercel)
-
-1. `npx drizzle-kit push` apontando para o banco de produção;
-2. Configure `DATABASE_URL` (e opcionalmente `GEMINI_API_KEY` e `GEMINI_MODEL`)
-   nas variáveis de ambiente do projeto Vercel;
-3. Faça o deploy do repositório — o app é verde no build mesmo sem variáveis
-   (as páginas mostram um estado amigável) e fica funcional assim que
-   `DATABASE_URL` é definido.
+1. **Nunca faça commit do arquivo `.env` local** (ele já está listado no `.gitignore`).
+2. Na Vercel, importe o repositório GitHub normalmente (framework detectado automaticamente: **Next.js**).
+3. Conecte um banco PostgreSQL gerenciado (**Neon**, **Supabase** ou **Vercel Postgres / Prisma Postgres**) e configure em **Project Settings → Environment Variables**:
+   - `DATABASE_URL` *(ou `POSTGRES_URL` — reconhecida automaticamente)*
+   - `GEMINI_API_KEY` *(opcional: também pode ser configurada em `/configuracoes`)*
+   - `GEMINI_MODEL` *(opcional, padrão `gemini-4-hydrogen`)*
+4. Faça o deploy. Na primeira requisição, o bootstrap automático (`src/db/bootstrap.ts`) cria todas as tabelas e colunas que faltarem (inclusive `cnpj` e `contact_phone`) e valida a conexão.
+5. Verifique o status de produção em `/api/health`.

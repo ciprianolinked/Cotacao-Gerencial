@@ -1,8 +1,11 @@
 import { notFound } from "next/navigation";
+import { DbErrorBanner } from "@/components/DbErrorBanner";
 import { QuotationEditorClient } from "@/components/QuotationEditorClient";
-import { DbUnavailable } from "@/components/DbUnavailable";
-import { safeLoad } from "@/lib/safe-load";
-import { getQuotationById, listCondominiums } from "@/lib/server-data";
+import {
+  formatDatabaseError,
+  getQuotationById,
+  listCondominiums,
+} from "@/lib/server-data";
 
 export const dynamic = "force-dynamic";
 
@@ -13,42 +16,51 @@ export default async function QuotationDetailPage({
 }) {
   const { id } = await params;
 
-  const [quotation, condosRes] = await Promise.all([
-    safeLoad(() => getQuotationById(id)),
-    safeLoad(() => listCondominiums()),
-  ]);
+  let quotation = null;
+  let condos: Awaited<ReturnType<typeof listCondominiums>> = [];
+  let dbError: string | null = null;
 
-  const error = quotation.error || condosRes.error;
-
-  if (error) {
-    return <DbUnavailable reason={error} />;
+  try {
+    [quotation, condos] = await Promise.all([
+      getQuotationById(id),
+      listCondominiums(),
+    ]);
+  } catch (err) {
+    console.error("QuotationDetailPage database error:", err);
+    dbError = formatDatabaseError(err);
   }
 
-  if (!quotation.data) {
+  if (dbError) {
+    return (
+      <main className="mx-auto max-w-[1100px] px-4 pb-16 pt-6 sm:px-6">
+        <DbErrorBanner message={dbError} />
+      </main>
+    );
+  }
+
+  if (!quotation) {
     notFound();
   }
 
-  const item = quotation.data;
-
   return (
     <QuotationEditorClient
-      quotationId={item.id}
-      protocol={item.protocol}
+      quotationId={quotation.id}
+      protocol={quotation.protocol}
       initial={{
-        status: item.status,
-        condominium: item.condominium,
-        analysisDate: item.analysisDate,
-        recipient: item.recipient,
-        service: item.service,
-        description: item.description,
-        kind: item.kind,
-        category: item.category,
-        suppliers: item.suppliers,
-        items: item.items,
-        analysis: item.analysis,
-        attachments: item.attachments,
+        status: quotation.status,
+        condominium: quotation.condominium,
+        analysisDate: quotation.analysisDate,
+        recipient: quotation.recipient,
+        service: quotation.service,
+        description: quotation.description,
+        kind: quotation.kind,
+        category: quotation.category,
+        suppliers: quotation.suppliers,
+        items: quotation.items,
+        analysis: quotation.analysis,
+        attachments: quotation.attachments,
       }}
-      condominiums={(condosRes.data ?? []).map((c) => c.name)}
+      condominiums={condos.map((c) => c.name)}
     />
   );
 }
