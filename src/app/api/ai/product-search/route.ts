@@ -1,41 +1,54 @@
 import { NextResponse } from "next/server";
-import { getAiConfig } from "@/lib/ai";
-import { searchProductsOnline } from "@/lib/server/product-search";
-
-export const dynamic = "force-dynamic";
-export const runtime = "nodejs";
-export const maxDuration = 120;
+import { getAiConfig } from "@/lib/server-data";
+import { searchProductsWithGemini } from "@/lib/gemini";
 
 export async function POST(request: Request) {
   try {
-    const payload = (await request.json()) as { items?: unknown; condominium?: unknown };
-    const items = Array.isArray(payload.items)
-      ? payload.items.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 2).slice(0, 12)
-      : [];
+    const body = (await request.json()) as {
+      items?: string[];
+      condominium?: string;
+    };
+
+    const items = (body.items ?? [])
+      .map((s) => String(s).trim())
+      .filter((s) => s.length > 2)
+      .slice(0, 8);
+
     if (items.length === 0) {
-      return NextResponse.json({ error: "Descreva ao menos um item para pesquisar." }, { status: 400 });
-    }
-    const config = await getAiConfig();
-    if (!config.geminiKey) {
       return NextResponse.json(
-        { error: "A pesquisa online usa o Google Search do Gemini. Configure a chave em “Configurar IA” para usá-la." },
-        { status: 400 },
+        { error: "Informe ao menos um produto para pesquisar." },
+        { status: 400 }
       );
     }
-    const output = await searchProductsOnline({
-      descriptions: items,
-      apiKey: config.geminiKey,
-      model: config.model,
-      hint: typeof payload.condominium === "string" ? payload.condominium.slice(0, 200) : undefined,
-      signal: request.signal,
+
+    const aiCfg = await getAiConfig();
+    if (!aiCfg.configured || !aiCfg.apiKey) {
+      return NextResponse.json(
+        {
+          error:
+            "Configure sua chave gratuita do Google Gemini em Configurar IA para pesquisar produtos online em lojas confiáveis.",
+        },
+        { status: 400 }
+      );
+    }
+
+    const { results, warnings } = await searchProductsWithGemini({
+      apiKey: aiCfg.apiKey,
+      model: aiCfg.model,
+      items,
     });
-    return NextResponse.json({
-      results: output.results,
-      warnings: output.warnings,
-      provider: `Google Gemini · ${config.model}`,
-    });
+
+    return NextResponse.json({ results, warnings });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Não foi possível pesquisar os produtos.";
-    return NextResponse.json({ error: message }, { status: 500 });
+    console.error("POST /api/ai/product-search error:", error);
+    return NextResponse.json(
+      {
+        error:
+          error instanceof Error
+            ? error.message
+            : "Falha ao pesquisar produtos online.",
+      },
+      { status: 500 }
+    );
   }
 }

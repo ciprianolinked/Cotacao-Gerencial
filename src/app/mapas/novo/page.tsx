@@ -1,20 +1,9 @@
-import { AppShell } from "@/components/AppShell";
-import { NewQuotationView } from "@/components/NewQuotationView";
-import { listCondominiums } from "@/lib/server/quotations";
+import { NewMapClient } from "@/components/NewMapClient";
+import { listCondominiums } from "@/lib/server-data";
 
 export const dynamic = "force-dynamic";
 
-export default async function NewQuotationPage() {
-  let condominiums: string[] = [];
-  try {
-    condominiums = (await listCondominiums()).map((condominium) => condominium.name);
-  } catch {
-    condominiums = [];
-  }
-
-  return (
-    <AppShell>
-      <NewQuotationView condominiums={condominiums} />
-    </AppShell>
-  );
+export default async function NewMapPage() {
+  const condos = await listCondominiums();
+  return <NewMapClient condominiumNames={condos.map((c) => c.name)} />;
 }

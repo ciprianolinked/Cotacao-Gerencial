@@ -1,14 +1,12 @@
 @import "tailwindcss";
 
 @theme {
-  /* Identidade oficial Gerencial (gerencialcond.com.br) */
   --color-ink: #181447;
   --color-ink-soft: #26215e;
   --color-ink-deep: #100e30;
   --color-brand: #fab12a;
   --color-brand-dark: #8a5c00;
   --color-brand-soft: #fdf3de;
-  --color-gold: #fab12a;
   --color-success: #0e4828;
   --color-success-soft: #e7f0e9;
   --color-paper: #f6f4ee;
@@ -19,6 +17,7 @@
 
 html {
   -webkit-text-size-adjust: 100%;
+  scroll-behavior: smooth;
 }
 
 body {
@@ -29,33 +28,33 @@ body {
 
 .font-display {
   font-family: var(--font-display);
-  font-weight: 800;
   letter-spacing: -0.01em;
+  font-weight: 800;
 }
 
 .label {
-  font-size: 0.625rem;
-  font-weight: 700;
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: #6b6b7d;
+  font-size: 0.625rem;
+  font-weight: 700;
 }
 
 .field {
-  width: 100%;
-  border-radius: 0.6rem;
   border: 1px solid var(--color-line);
-  background: #ffffff;
+  width: 100%;
+  color: var(--color-ink);
+  background: #fff;
+  border-radius: 0.6rem;
   padding: 0.55rem 0.7rem;
   font-size: 0.875rem;
-  color: var(--color-ink);
-  transition: border-color 120ms ease, box-shadow 120ms ease;
+  transition: border-color 0.12s, box-shadow 0.12s;
 }
 
 .field:focus {
-  outline: none;
   border-color: var(--color-ink);
-  box-shadow: 0 0 0 3px rgba(250, 177, 42, 0.35);
+  outline: none;
+  box-shadow: 0 0 0 3px #fab12a59;
 }
 
 .field::placeholder {
@@ -63,17 +62,17 @@ body {
 }
 
 .btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.45rem;
-  border-radius: 0.6rem;
-  font-size: 0.8125rem;
-  font-weight: 700;
-  padding: 0.55rem 0.95rem;
-  transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease, transform 120ms ease;
   cursor: pointer;
   border: 1px solid transparent;
+  border-radius: 0.6rem;
+  justify-content: center;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.55rem 0.95rem;
+  font-size: 0.8125rem;
+  font-weight: 700;
+  transition: background-color 0.12s, color 0.12s, border-color 0.12s, transform 0.12s;
+  display: inline-flex;
 }
 
 .btn:active {
@@ -104,9 +103,9 @@ body {
 }
 
 .btn-ghost {
-  background: #fff;
   border-color: var(--color-line);
   color: var(--color-ink);
+  background: #fff;
 }
 
 .btn-ghost:hover:not(:disabled) {
@@ -115,26 +114,24 @@ body {
 }
 
 .card {
-  background: #fff;
   border: 1px solid var(--color-line);
+  background: #fff;
   border-radius: 1rem;
-  box-shadow: 0 1px 2px rgba(24, 20, 71, 0.05), 0 12px 30px -24px rgba(24, 20, 71, 0.35);
+  box-shadow: 0 1px 2px #1814470d, 0 12px 30px -24px #18144759;
 }
 
-/* ---------------- Documento (Mapa de Cotação) ---------------- */
-
 .doc-sheet {
-  background: #fff;
   color: #23233a;
+  background: #fff;
+  border-radius: 4px;
   width: 100%;
   max-width: 900px;
   margin: 0 auto;
   padding: 0 0 26px;
-  border-radius: 4px;
-  overflow: hidden;
-  box-shadow: 0 30px 80px -50px rgba(24, 20, 71, 0.55), 0 0 0 1px rgba(24, 20, 71, 0.08);
   font-size: 11.5px;
   line-height: 1.45;
+  overflow: hidden;
+  box-shadow: 0 30px 80px -50px #1814478c, 0 0 0 1px #18144714;
 }
 
 .doc-band {
@@ -144,8 +141,15 @@ body {
 }
 
 .doc-rule {
+  background: linear-gradient(
+    90deg,
+    var(--color-brand) 0%,
+    var(--color-brand) 30%,
+    #ffd47e 50%,
+    var(--color-brand) 70%,
+    #c77f0a 100%
+  );
   height: 5px;
-  background: linear-gradient(90deg, var(--color-brand) 0%, var(--color-brand) 30%, #ffd47e 50%, var(--color-brand) 70%, #c77f0a 100%);
 }
 
 .doc-body {
@@ -153,48 +157,48 @@ body {
 }
 
 .doc-section-title {
-  display: flex;
-  align-items: center;
+  border-bottom: 1px solid var(--color-line);
   justify-content: space-between;
+  align-items: center;
   gap: 12px;
   margin: 18px 0 8px;
   padding-bottom: 5px;
-  border-bottom: 1px solid var(--color-line);
+  display: flex;
 }
 
 .doc-section-title span:first-child {
-  font-size: 10px;
-  font-weight: 800;
   letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--color-ink);
+  font-size: 10px;
+  font-weight: 800;
 }
 
 .doc-table {
-  width: 100%;
   border-collapse: collapse;
+  width: 100%;
   font-size: 10.5px;
 }
 
 .doc-table th {
   background: var(--color-ink);
   color: #fff;
-  font-size: 9px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  font-weight: 700;
-  padding: 6px 7px;
   text-align: left;
   vertical-align: middle;
+  padding: 6px 7px;
+  font-size: 9px;
+  font-weight: 700;
 }
 
 .doc-table td {
-  padding: 6px 7px;
-  border-bottom: 1px solid #e9e6d9;
   vertical-align: top;
+  border-bottom: 1px solid #e9e6d9;
+  padding: 6px 7px;
 }
 
-.doc-table tbody tr:nth-child(even) td {
+.doc-table tbody tr:nth-child(2n) td {
   background: #fbf9f2;
 }
 
@@ -205,9 +209,9 @@ body {
 }
 
 .doc-best-cell {
-  background: #e7f0e9 !important;
   color: var(--color-success);
   font-weight: 800;
+  background: #e7f0e9 !important;
 }
 
 @media print {
@@ -228,8 +232,8 @@ body {
   .doc-sheet {
     box-shadow: none;
     border-radius: 0;
-    max-width: none;
     width: 100%;
+    max-width: none;
     padding: 0 0 10px;
     font-size: 10px;
   }
@@ -247,20 +251,20 @@ body {
   }
 
   .print-page {
-    padding: 0 !important;
-    margin: 0 !important;
     background: #fff !important;
+    margin: 0 !important;
+    padding: 0 !important;
   }
 
   .dashboard-print {
     max-width: none !important;
-    padding: 0 !important;
     margin: 0 !important;
+    padding: 0 !important;
   }
 
   .dashboard-print .card {
-    box-shadow: none !important;
     break-inside: avoid;
+    box-shadow: none !important;
   }
 
   * {
