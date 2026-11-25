@@ -1,93 +1,164 @@
 import { NextResponse } from "next/server";
-import { extractQuotation, validateUploads, type ExtractionHints, type UploadInput } from "@/lib/ai";
-import { createAiAnalysisStream } from "@/lib/server/analysis-stream";
-import type { AiAnalysisPhase } from "@/lib/ai-stream";
-import { ACCEPTED_UPLOAD_TYPES, MAX_FILES, MAX_FILE_BYTES } from "@/lib/constants";
-
-export const runtime = "nodejs";
-// Fluid Compute permite uma espera maior sem interromper análises de vários PDFs.
-// O limite do Gemini é menor (210s), reservando tempo para entregar a resposta.
-export const maxDuration = 240;
+import { getAiConfig } from "@/lib/server-data";
+import { extractQuotationWithGemini, searchProductsWithGemini } from "@/lib/gemini";
+import { parseQuotationText } from "@/lib/calculations";
 
 export async function POST(request: Request) {
   try {
-    const contentType = request.headers.get("content-type") ?? "";
-    let files: UploadInput[] = [];
-    let text = "";
-    let hints: ExtractionHints = {};
-    const rejected: string[] = [];
+    const contentType = request.headers.get("content-type") || "";
+    const uploadedFiles: { name: string; mimeType: string; base64: string; size: number }[] = [];
+    let pastedText = "";
+    let searchProducts = false;
+    let context: {
+      condominium?: string;
+      analysisDate?: string;
+      recipient?: string;
+      service?: string;
+      description?: string;
+      kind?: "servico" | "produtos";
+      category?: string;
+    } = {};
 
     if (contentType.includes("multipart/form-data")) {
-      const form = await request.formData();
-      const entries = form.getAll("files").filter((entry): entry is File => entry instanceof File);
-      text = String(form.get("text") ?? "");
-      const rawHints = String(form.get("hints") ?? "");
-      if (rawHints) {
-        try {
-          hints = JSON.parse(rawHints) as ExtractionHints;
-        } catch {
-          hints = {};
+      const formData = await request.formData();
+      pastedText = String(formData.get("pastedText") || "").trim();
+      searchProducts = String(formData.get("searchProducts") || "false") === "true";
+      const rawCtx = String(formData.get("context") || "{}");
+      try {
+        context = JSON.parse(rawCtx);
+      } catch {
+        context = {};
+      }
+      const files = formData.getAll("files");
+      let totalSize = 0;
+      for (const entry of files) {
+        if (entry instanceof File && entry.size > 0) {
+          totalSize += entry.size;
+          if (totalSize > 12 * 1024 * 1024) {
+            return NextResponse.json(
+              { error: "O tamanho total dos arquivos excede o limite suportado." },
+              { status: 400 }
+            );
+          }
+          const arrayBuffer = await entry.arrayBuffer();
+          uploadedFiles.push({
+            name: entry.name,
+            mimeType: entry.type || "application/pdf",
+            base64: Buffer.from(arrayBuffer).toString("base64"),
+            size: entry.size,
+          });
         }
       }
-
-      if (entries.length > MAX_FILES) rejected.push(`Apenas ${MAX_FILES} arquivos são processados por vez.`);
-      const accepted: UploadInput[] = [];
-      for (const file of entries.slice(0, MAX_FILES)) {
-        const allowed = ACCEPTED_UPLOAD_TYPES.includes(file.type) || file.type.startsWith("image/");
-        if (!allowed) {
-          rejected.push(`${file.name}: formato não suportado (use PDF, JPG, PNG ou WEBP).`);
-          continue;
-        }
-        if (file.size > MAX_FILE_BYTES) {
-          rejected.push(`${file.name}: excede 15 MB.`);
-          continue;
-        }
-        const buffer = Buffer.from(await file.arrayBuffer());
-        accepted.push({ name: file.name, type: file.type || "application/pdf", size: file.size, base64: buffer.toString("base64") });
-      }
-      files = accepted;
     } else {
-      const payload = (await request.json()) as {
-        files?: unknown;
-        text?: unknown;
-        hints?: unknown;
+      const body = (await request.json()) as {
+        pastedText?: string;
+        searchProducts?: boolean;
+        context?: typeof context;
       };
-      files = validateUploads(payload.files);
-      text = typeof payload.text === "string" ? payload.text : "";
-      hints = (payload.hints ?? {}) as ExtractionHints;
+      pastedText = body.pastedText?.trim() || "";
+      searchProducts = Boolean(body.searchProducts);
+      context = body.context ?? {};
     }
 
-    if (files.length === 0 && !text.trim()) {
+    if (uploadedFiles.length === 0 && !pastedText) {
       return NextResponse.json(
-        { error: rejected[0] ?? "Envie ao menos um arquivo PDF/imagem ou cole o texto da cotação para a análise." },
-        { status: 400 },
+        {
+          error:
+            "Envie ao menos um arquivo (PDF ou imagem) ou cole o texto das propostas para análise.",
+        },
+        { status: 400 }
       );
     }
 
-    // Não produzir um mapa parcial se algum arquivo não pôde ser processado.
-    if (rejected.length > 0) {
-      return NextResponse.json({ error: rejected.join(" ") }, { status: 400 });
-    }
+    const aiCfg = await getAiConfig();
 
-    async function runAnalysis(signal: AbortSignal, onPhase?: (phase: AiAnalysisPhase) => void) {
-      return extractQuotation({ files, text, hints, signal, onPhase });
-    }
+    // If AI is configured, use Gemini
+    if (aiCfg.configured && aiCfg.apiKey) {
+      const { draft, modelUsed, warnings: extractWarnings } =
+        await extractQuotationWithGemini({
+          apiKey: aiCfg.apiKey,
+          model: aiCfg.model,
+          files: uploadedFiles.map((f) => ({
+            name: f.name,
+            mimeType: f.mimeType,
+            base64: f.base64,
+          })),
+          pastedText,
+          context,
+          searchProducts,
+        });
 
-    if (new URL(request.url).searchParams.get("stream") === "1") {
-      return new Response(createAiAnalysisStream(runAnalysis, { signal: request.signal }), {
-        headers: {
-          "Content-Type": "application/x-ndjson; charset=utf-8",
-          "Cache-Control": "no-store, no-transform",
-          "X-Accel-Buffering": "no",
-          "X-Content-Type-Options": "nosniff",
-        },
+      const warnings: string[] = [...extractWarnings];
+
+      // Optional trusted-store product link search for product maps
+      if (searchProducts && draft.items.length > 0) {
+        const queries = draft.items
+          .filter((it) => !it.purchaseUrl && it.description.trim().length > 3)
+          .slice(0, 5)
+          .map((it) => it.description.trim());
+
+        if (queries.length > 0) {
+          const searchRes = await searchProductsWithGemini({
+            apiKey: aiCfg.apiKey,
+            model: modelUsed,
+            items: queries,
+          });
+          warnings.push(...searchRes.warnings);
+
+          for (const res of searchRes.results) {
+            const match = draft.items.find(
+              (it) =>
+                !it.purchaseUrl &&
+                it.description.toLowerCase().includes(res.query.toLowerCase().slice(0, 18))
+            );
+            if (match) {
+              match.purchaseUrl = res.url;
+              match.purchaseStore = res.store;
+              match.purchasePrice = res.price;
+              match.purchaseVerified = res.verified;
+              match.purchaseSource = "pesquisa";
+            }
+          }
+        }
+      }
+
+      return NextResponse.json({
+        mode: "ia",
+        model: modelUsed,
+        draft,
+        warnings,
       });
     }
 
-    // Mantém a resposta JSON para integrações existentes.
-    return NextResponse.json(await runAnalysis(request.signal));
+    // Fallback without AI: works for pasted text
+    if (pastedText) {
+      const draft = parseQuotationText(pastedText, context);
+      return NextResponse.json({
+        mode: "manual",
+        draft,
+        warnings: [
+          "IA não configurada — leitura realizada pelo analisador de texto local. Revise os campos antes de salvar.",
+        ],
+      });
+    }
+
+    return NextResponse.json(
+      {
+        error:
+          "Para ler arquivos PDF ou imagens automaticamente, configure sua chave gratuita do Google Gemini em Configurar IA — ou cole o texto das propostas.",
+      },
+      { status: 400 }
+    );
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Não foi possível analisar os documentos.";
-    return NextResponse.json({ error: message }, { status: 500 });
+    console.error("POST /api/ai/extract error:", error);
+    return NextResponse.json(
+      {
+        error:
+          error instanceof Error
+            ? error.message
+            : "Erro ao processar a leitura das propostas.",
+      },
+      { status: 500 }
+    );
   }
 }

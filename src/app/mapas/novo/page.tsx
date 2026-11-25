@@ -1,20 +1,16 @@
-import { AppShell } from "@/components/AppShell";
-import { NewQuotationView } from "@/components/NewQuotationView";
-import { listCondominiums } from "@/lib/server/quotations";
+import { NewMapClient } from "@/components/NewMapClient";
+import { DbUnavailable } from "@/components/DbUnavailable";
+import { safeLoad } from "@/lib/safe-load";
+import { listCondominiums } from "@/lib/server-data";
 
 export const dynamic = "force-dynamic";
 
-export default async function NewQuotationPage() {
-  let condominiums: string[] = [];
-  try {
-    condominiums = (await listCondominiums()).map((condominium) => condominium.name);
-  } catch {
-    condominiums = [];
+export default async function NewMapPage() {
+  const { data, error } = await safeLoad(() => listCondominiums());
+
+  if (error || !data) {
+    return <DbUnavailable reason={error ?? undefined} />;
   }
 
-  return (
-    <AppShell>
-      <NewQuotationView condominiums={condominiums} />
-    </AppShell>
-  );
+  return <NewMapClient condominiumNames={data.map((c) => c.name)} />;
 }

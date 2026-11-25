@@ -5,6 +5,8 @@ import { listQuotations } from "@/lib/server-data";
 import { generateIndicatorsPdf } from "@/lib/pdf-generator";
 import { sanitizeSlug, todayISO } from "@/lib/calculations";
 
+export const maxDuration = 30;
+
 export async function POST(request: Request) {
   try {
     const body = (await request.json().catch(() => ({}))) as {

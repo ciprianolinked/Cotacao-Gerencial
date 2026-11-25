@@ -1,31 +1,101 @@
-# Gerencial · Mapa de Cotação
+# Gerencial — Mapa de Cotação
 
-Aplicativo de mapas de cotação para governança condominial. O guia completo e ilustrado está no menu **Ajuda → Publicar o aplicativo** (`/ajuda/publicar`). O guia da IA está em `/ajuda/ia`.
+Plataforma de governança condominial da **Gerencial** para elaborar, comparar
+e aprovar **mapas de cotação** com apoio de **inteligência artificial gratuita**
+(Google Gemini). A aplicação gera documentos institucionais prontos para
+assembleia/conselho, assinatura e anexo ao processo de compras do condomínio.
 
-## Publicação: resumo dos passos
+## Stack
 
-1. **Código no GitHub:** exporte ou baixe o projeto no ambiente em que ele foi criado. Use o GitHub Desktop para adicionar a pasta que contém `package.json`, `src` e `public`, faça um commit e publique em um repositório privado. Não inclua `.env`, senhas ou chaves. O `.gitignore` protege arquivos locais novos, mas não remove segredos já presentes no histórico.
-2. **Banco Neon:** crie uma conta e um projeto em [Neon](https://console.neon.tech/). Em **Connect**, copie a connection string PostgreSQL com **Connection pooling**. Ela contém uma senha e não deve ser divulgada.
-3. **Estrutura do banco:** no Neon, abra **Postgres database → SQL Editor**, selecione a branch e o banco corretos, cole e execute o conteúdo de [`public/guia/estrutura-inicial.sql`](public/guia/estrutura-inicial.sql). O arquivo prepara um banco novo sem dados de exemplo; ele não migra tabelas antigas nem transfere mapas de outro banco.
-4. **Vercel:** crie uma conta em [Vercel](https://vercel.com/), conecte o GitHub e importe o repositório em **Add New → Project**. Mantenha o preset Next.js e a pasta raiz que contém `package.json`. Adicione `DATABASE_URL` como variável **Secret** de **Production**, com a conexão completa do Neon. Clique em **Deploy**.
-5. **Proteção obrigatória:** esta versão ainda não tem login próprio nem permissões por usuário. Na Vercel, use **Deployment Protection → Vercel Authentication → All Deployments** e verifique em janela anônima se todos os endereços exigem acesso. Não use dados reais enquanto houver endereços públicos. Consulte o plano e as permissões adequados à sua equipe.
-6. **Teste:** em sessão autorizada, abra `/api/health` para verificar a conexão e `/api/quotations` para conferir a tabela de mapas. A resposta positiva de health não verifica todas as tabelas. Se alterar variáveis na Vercel, faça um novo deploy.
-7. **IA (opcional):** depois de proteger o site, cadastre `GEMINI_API_KEY` como **Secret** na Vercel e faça Redeploy, ou use o painel protegido. A chave salva no painel tem prioridade sobre a variável. Veja `/ajuda/ia` e consulte os termos de privacidade do provedor antes de enviar dados reais.
+| Camada | Tecnologia |
+|---|---|
+| Framework | Next.js (App Router) + React |
+| Banco | PostgreSQL + Drizzle ORM |
+| Estilização | Tailwind CSS v4 |
+| Documentos | `pdf-lib` (PDF institucional A4) |
+| IA | Google Gemini API (cota gratuita) |
+| Testes | `node:test` + `tsx` |
 
-O Neon criado para a publicação é um banco novo. Mapas já existentes em outra instalação não são migrados automaticamente. Faça backup e migre os dados separadamente se necessário.
+## Estrutura
 
-## Custos e limites
+```text
+src/
+  app/                 # Rotas
+    page.tsx           # Painel (KPIs, filtros de busca, tabela de mapas)
+    mapas/novo/        # Novo mapa (contexto + leitura com IA + texto colado)
+    mapas/[id]/        # Editor e visualizador do documento institucional
+    condominios/       # Base de condomínios e associações (cadastro por CNPJ)
+    indicadores/       # Dashboard de assembleia (CSV/PDF/impressão)
+    configuracoes/     # Configuração da chave gratuita do Gemini
+    ajuda/             # Central de ajuda e guia ilustrado da IA
+    api/               # Rotas REST (mapas, condomínios, IA, CNPJ, PDFs)
+  components/          # UI compartilhada (editor, painel IA, documento, etc.)
+  db/                  # Schema Drizzle + seed automático
+  lib/                 # Lógica: cálculos, PDF, Gemini, CNPJ, logo embutida
+tests/                 # Testes unitários (node:test)
+public/identidade/     # Identidade visual (logo, símbolo)
+```
 
-- O plano Hobby da Vercel é destinado a uso pessoal não comercial; para uma empresa, verifique os planos Pro/Enterprise.
-- GitHub, Neon e Gemini oferecem opções gratuitas sujeitas a limites e condições vigentes. Confira os valores e termos nos sites oficiais.
-- Nas Vercel Functions, o corpo de cada requisição tem limite de 4,5 MB. Neste aplicativo, mantenha o total dos arquivos e texto abaixo de aproximadamente 4 MB por envio.
-- A análise de múltiplas propostas usa Fluid Compute e pode durar alguns minutos, mesmo com arquivos pequenos. A porcentagem mostrada é apenas estimativa; o resultado só é concluído quando o provedor retorna.
-- Erros transitórios do Gemini recebem tentativas limitadas com espera. Se necessário, é usada uma API ou modelo multimodal alternativo do próprio Google, com aviso no resultado. Cotas, custos e privacidade seguem as condições do projeto Google; erros de chave ou cota diária não são repetidos indefinidamente.
-- Na versão atual, o banco guarda os dados dos mapas e os metadados dos anexos, mas não os PDFs ou imagens originais. Guarde os documentos originais em local seguro.
-- Nos serviços gratuitos do Gemini, o Google informa que pode usar conteúdo e respostas para melhorar produtos. Não envie dados pessoais, sensíveis ou confidenciais sem avaliar os termos e as regras aplicáveis.
+## Configuração
 
-## Desenvolvimento
+1. Copie `.env.example` para `.env` e preencha:
+   - `DATABASE_URL` — conexão PostgreSQL (obrigatória)
+   - `GEMINI_API_KEY` — chave gratuita do Google AI Studio (opcional)
+   - `GEMINI_MODEL` — modelo principal usado na leitura (padrão `gemini-4-hydrogen`)
+2. Instale as dependências e aplique o schema:
 
-O projeto é Next.js com PostgreSQL e Drizzle. Para desenvolvimento local, defina `DATABASE_URL` em um arquivo `.env` ignorado pelo Git e execute `npm install` e `npm run dev`. O arquivo `drizzle.config.ts` lê a variável de ambiente; para migrações em Neon, utilize uma conexão direta adequada e faça backup antes de alterar estruturas existentes.
+```bash
+npm install
+npx drizzle-kit push
+```
 
-Documentação: [GitHub Desktop](https://docs.github.com/en/desktop), [Neon](https://neon.com/docs/), [Vercel](https://vercel.com/docs) e [termos do Gemini](https://ai.google.dev/gemini-api/terms).
+3. Rode o servidor local:
+
+```bash
+npm run dev   # http://localhost:3000
+```
+
+Na Vercel, configure a mesma variável `DATABASE_URL` no painel do projeto
+(Settings → Environment Variables). Os arquivos `.env*` são ignorados pelo
+`.gitignore` e nunca são publicados. O seed inicial (condomínios, mapas de
+exemplo, histórico de PDFs) roda **automaticamente na primeira requisição** com
+banco vazio.
+
+## Rotas principais
+
+| Rota | Descrição |
+|---|---|
+| `/` | Painel: KPIs, último mapa, tabela de mapas com busca por campo, barra lateral |
+| `/mapas/novo` | Criação de novo mapa (IA gratuita ou texto colado) |
+| `/mapas/[id]` | Editor completo + pré-visualização do documento + download de PDF |
+| `/condominios` | Cadastro completo com consulta por CNPJ na Receita Federal |
+| `/indicadores` | Dashboard para assembleia (CSV, PDF, impressão) |
+| `/configuracoes` | Conexão e teste da chave gratuita do Google Gemini |
+| `/ajuda` e `/ajuda/ia` | Central de ajuda + guia ilustrado de 2 minutos |
+
+## Fluxo de leitura com IA
+
+1. Anexe PDFs/fotos (até 6 arquivos) ou cole o texto das propostas;
+2. O sistema chama o Gemini com **alternância automática de modelos**:
+   `gemini-4-hydrogen` → `gemini-3.5-flash-lite` → `gemini-3.8-flash` →
+   `gemini-3.1-flash-lite` → `gemini-2.5-flash-lite`, com retry em erros 429/5xx;
+3. A IA retorna fornecedores, itens, quantidades e preços unitários, que são
+   fundidos ao mapa automaticamente.
+
+Sem a IA configurada, a plataforma funciona normalmente com texto colado e
+preenchimento manual.
+
+## Testes
+
+```bash
+npx tsx --test tests/*.test.ts
+```
+
+## Deploy (Vercel)
+
+1. `npx drizzle-kit push` apontando para o banco de produção;
+2. Configure `DATABASE_URL` (e opcionalmente `GEMINI_API_KEY` e `GEMINI_MODEL`)
+   nas variáveis de ambiente do projeto Vercel;
+3. Faça o deploy do repositório — o app é verde no build mesmo sem variáveis
+   (as páginas mostram um estado amigável) e fica funcional assim que
+   `DATABASE_URL` é definido.

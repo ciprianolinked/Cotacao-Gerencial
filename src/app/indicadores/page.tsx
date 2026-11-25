@@ -1,46 +1,31 @@
 import type { Metadata } from "next";
-import { AppShell } from "@/components/AppShell";
-import { IndicatorsDashboard } from "@/components/IndicatorsDashboard";
-import { listPdfExports } from "@/lib/server/downloads";
-import { listCondominiums, listQuotations } from "@/lib/server/quotations";
-import type { PdfExportRecord } from "@/lib/server/downloads";
-import type { QuotationRecord } from "@/lib/types";
+import { IndicatorsClient } from "@/components/IndicatorsClient";
+import { DbUnavailable } from "@/components/DbUnavailable";
+import { safeLoad } from "@/lib/safe-load";
+import { listPdfDownloads, listQuotations } from "@/lib/server-data";
 
 export const dynamic = "force-dynamic";
-export const metadata: Metadata = { title: "Indicadores para assembleia · Gerencial" };
 
-export default async function IndicatorsPage({ searchParams }: { searchParams: Promise<{ condominio?: string }> }) {
-  const { condominio } = await searchParams;
-  let records: QuotationRecord[] = [];
-  let condominiums: string[] = [];
-  let downloads: PdfExportRecord[] = [];
-  let dbError = false;
+export const metadata: Metadata = {
+  title: "Indicadores para assembleia · Gerencial",
+};
 
-  // Os mapas e condomínios são a base dos indicadores. O histórico de PDFs é
-  // complementar: uma falha nele não pode apagar o dashboard inteiro.
-  try {
-    const [quotations, condos] = await Promise.all([listQuotations(), listCondominiums()]);
-    records = quotations;
-    condominiums = condos.map((item) => item.name);
-  } catch {
-    dbError = true;
-  }
+export default async function IndicatorsPage() {
+  const [quotationsRes, downloadsRes] = await Promise.all([
+    safeLoad(() => listQuotations()),
+    safeLoad(() => listPdfDownloads(20)),
+  ]);
 
-  try {
-    downloads = await listPdfExports(10);
-  } catch {
-    downloads = [];
+  const error = quotationsRes.error || downloadsRes.error;
+
+  if (error || !quotationsRes.data) {
+    return <DbUnavailable reason={error ?? undefined} />;
   }
 
   return (
-    <AppShell>
-      <IndicatorsDashboard
-        records={records}
-        condominiums={condominiums}
-        initialCondominium={condominio}
-        initialDownloads={downloads}
-        dbError={dbError}
-      />
-    </AppShell>
+    <IndicatorsClient
+      quotations={quotationsRes.data}
+      initialDownloads={downloadsRes.data ?? []}
+    />
   );
 }

@@ -1,14 +1,17 @@
-import "dotenv/config";
 import { defineConfig } from "drizzle-kit";
+import dotenv from "dotenv";
 
-const databaseUrl = process.env.DATABASE_URL;
-
-if (!databaseUrl) {
-  throw new Error("DATABASE_URL não está definida. Configure a conexão com o banco antes de usar o Drizzle Kit.");
-}
+dotenv.config();
 
 export default defineConfig({
   dialect: "postgresql",
   schema: "./src/db/schema.ts",
-  dbCredentials: { url: databaseUrl },
+  out: "./drizzle",
+  dbCredentials: {
+    // Sem valor padrao em producao: a URL vem do .env local ou das
+    // variaveis de ambiente do projeto Vercel.
+    url:
+      process.env.DATABASE_URL ??
+      "postgresql://postgres:postgres@127.0.0.1:5432/app_db",
+  },
 });

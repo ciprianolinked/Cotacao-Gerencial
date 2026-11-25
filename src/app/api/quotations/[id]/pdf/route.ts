@@ -1,41 +1,84 @@
 import { NextResponse } from "next/server";
-import { recordPdfExport } from "@/lib/server/downloads";
-import { buildMapPdf } from "@/lib/server/pdf";
-import { getQuotation, isUuid } from "@/lib/server/quotations";
+import { db } from "@/db";
+import { pdfDownloads } from "@/db/schema";
+import { getQuotationById } from "@/lib/server-data";
+import { generateQuotationPdf } from "@/lib/pdf-generator";
+import { sanitizeSlug } from "@/lib/calculations";
 
-export const dynamic = "force-dynamic";
-export const runtime = "nodejs";
-export const maxDuration = 60;
+export const maxDuration = 30;
 
-type Context = { params: Promise<{ id: string }> };
-
-export async function GET(request: Request, context: Context) {
-  const { id } = await context.params;
-  if (!isUuid(id)) return NextResponse.json({ error: "Mapa não encontrado." }, { status: 404 });
-  const record = await getQuotation(id).catch(() => null);
-  if (!record) return NextResponse.json({ error: "Mapa não encontrado." }, { status: 404 });
-
+export async function POST(
+  _request: Request,
+  context: { params: Promise<{ id: string }> }
+) {
   try {
-    const { buffer, fileName } = await buildMapPdf(record, record.protocol);
-    const exportRecord = await recordPdfExport({
+    const { id } = await context.params;
+    const quotation = await getQuotationById(id);
+    if (!quotation) {
+      return NextResponse.json({ error: "Mapa não encontrado." }, { status: 404 });
+    }
+
+    const pdfBytes = await generateQuotationPdf(quotation);
+    const slug = sanitizeSlug(quotation.condominium || "Condominio", 56);
+    const fileName = `Mapa-de-Cotacao_${quotation.protocol}_${slug}_${quotation.analysisDate}.pdf`;
+
+    await db.insert(pdfDownloads).values({
       fileName,
       kind: "mapa",
-      sizeBytes: buffer.byteLength,
-      referenceId: record.id,
-      protocol: record.protocol,
-      condominium: record.condominium || null,
-    }).catch(() => null);
+      quotationId: quotation.id,
+      condominium: quotation.condominium,
+      sizeBytes: pdfBytes.byteLength,
+    });
 
+    const base64 = Buffer.from(pdfBytes).toString("base64");
     return NextResponse.json({
       fileName,
-      fileBase64: buffer.toString("base64"),
-      sizeBytes: buffer.byteLength,
-      generatedAt: new Date().toISOString(),
-      recorded: Boolean(exportRecord),
-      exportId: exportRecord?.id ?? null,
+      sizeBytes: pdfBytes.byteLength,
+      base64,
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Não foi possível gerar o PDF do mapa.";
-    return NextResponse.json({ error: message }, { status: 500 });
+    console.error("POST /api/quotations/[id]/pdf error:", error);
+    return NextResponse.json(
+      { error: "Não foi possível gerar o PDF do mapa." },
+      { status: 500 }
+    );
+  }
+}
+
+export async function GET(
+  _request: Request,
+  context: { params: Promise<{ id: string }> }
+) {
+  try {
+    const { id } = await context.params;
+    const quotation = await getQuotationById(id);
+    if (!quotation) {
+      return NextResponse.json({ error: "Mapa não encontrado." }, { status: 404 });
+    }
+
+    const pdfBytes = await generateQuotationPdf(quotation);
+    const slug = sanitizeSlug(quotation.condominium || "Condominio", 56);
+    const fileName = `Mapa-de-Cotacao_${quotation.protocol}_${slug}_${quotation.analysisDate}.pdf`;
+
+    await db.insert(pdfDownloads).values({
+      fileName,
+      kind: "mapa",
+      quotationId: quotation.id,
+      condominium: quotation.condominium,
+      sizeBytes: pdfBytes.byteLength,
+    });
+
+    return new NextResponse(Buffer.from(pdfBytes), {
+      headers: {
+        "Content-Type": "application/pdf",
+        "Content-Disposition": `attachment; filename="${fileName}"`,
+      },
+    });
+  } catch (error) {
+    console.error("GET /api/quotations/[id]/pdf error:", error);
+    return NextResponse.json(
+      { error: "Não foi possível gerar o PDF do mapa." },
+      { status: 500 }
+    );
   }
 }

@@ -1,5 +1,3 @@
-import { readFile } from "node:fs/promises";
-import path from "node:path";
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from "pdf-lib";
 import {
   computeSummary,
@@ -11,6 +9,7 @@ import {
   supplierCostBreakdown,
 } from "./calculations";
 import { COST_TYPE_LABEL, type CostType, type QuotationRecord } from "./types";
+import { getLogoBytes } from "./logo";
 
 const INK = rgb(24 / 255, 20 / 255, 71 / 255);
 const INK_DEEP = rgb(16 / 255, 14 / 255, 48 / 255);
@@ -112,8 +111,7 @@ function truncateText(
 
 async function embedLogo(pdfDoc: PDFDocument) {
   try {
-    const logoPath = path.join(process.cwd(), "public", "identidade", "logo.png");
-    const bytes = await readFile(logoPath);
+    const bytes = getLogoBytes();
     return await pdfDoc.embedPng(bytes);
   } catch {
     return null;
